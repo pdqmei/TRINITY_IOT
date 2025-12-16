@@ -6,7 +6,6 @@
 #include "sensor_control.h"
 #include "wifi_handler.h"
 #include "mqtt_handler.h"
-#include "mqtt_handler.h"
 #include "firebase_handler.h"
 
 static const char *TAG = "MAIN";
@@ -66,31 +65,35 @@ void control_logic_task(void *pvParameters)
     }
 }
 
+// ... (các hàm khác)
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "   SMART ENVIRONMENTAL MONITORING");
     ESP_LOGI(TAG, "   With WiFi + MQTT + Firebase");
     ESP_LOGI(TAG, "========================================");
-
-    // 1. Khởi tạo WiFi và kết nối
+    
+    // 1. Khởi tạo và kết nối WiFi
     ESP_LOGI(TAG, "Connecting to WiFi...");
+    
     wifi_init_sta(); 
-
-    // Khởi tạo phần cứng
+    
+    // 2. Khởi tạo phần cứng và sensors
     device_init();
     sensor_init();
-
-    // 2. Khởi động MQTT
+    
+    // 3. Khởi động MQTT (Cần tham số room_id)
     ESP_LOGI(TAG, "Starting MQTT...");
-    mqtt_app_start("bedroom"); 
-
-    // 3. Khởi động Firebase
+    const char *my_room = "livingroom";
+    mqtt_app_start(my_room);
+    
+    // 4. Khởi động Firebase 
     ESP_LOGI(TAG, "Starting Firebase...");
     firebase_init(); 
-
-    // 4. Tạo task điều khiển
+    
+    // 5. Tạo task điều khiển
     xTaskCreate(control_logic_task, "control_logic", 8192, NULL, 5, NULL);
-
+    
     ESP_LOGI(TAG, "System started!");
 }
