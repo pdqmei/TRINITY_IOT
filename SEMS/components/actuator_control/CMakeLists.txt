@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "fan.c" "whistle.c" "led.c" "device_control.c"
+    SRCS "led.c" "fan.c" "device_control.c" "whistle.c"
     INCLUDE_DIRS "."
+    REQUIRES esp_driver_gpio esp_driver_ledc
 )
-

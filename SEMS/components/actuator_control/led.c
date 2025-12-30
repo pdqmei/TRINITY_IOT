@@ -1,28 +1,22 @@
 #include "led.h"
+#include "device_control.h"
 #include "driver/gpio.h"
-#include "esp_log.h"
 
-static int led_state = 0;
+void led_init(void) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << LED_PIN),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+}
 
-static const char *TAG = "LED";
-
-void led_on(void)
-{
+void led_on(void) {
     gpio_set_level(LED_PIN, 1);
-    led_state = 1;
-    ESP_LOGI(TAG, "💡 LED ON");
 }
 
-void led_off(void)
-{
+void led_off(void) {
     gpio_set_level(LED_PIN, 0);
-    led_state = 0;
-    ESP_LOGI(TAG, "💡 LED OFF");
-}
-
-void led_toggle(void)
-{
-    led_state = !led_state;
-    gpio_set_level(LED_PIN, led_state);
-    ESP_LOGI(TAG, "💡 LED %s", led_state ? "ON" : "OFF");
 }

@@ -9,6 +9,10 @@
 #include "wifi_manager.h"
 #include "mqtt_handler.h"
 #include "firebase_handler.h"
+// Actuator APIs used by main logic
+#include "fan.h"
+#include "led.h"
+#include "whistle.h"
 
 static const char *TAG = "MAIN";
 
@@ -20,9 +24,9 @@ static const char *TAG = "MAIN";
 void control_logic_task(void *pvParameters)
 {
     int count = 0;
-    
+    sensor_control_init();
     while(1) {
-        sensor_data_t data = read_all_sensors();
+        sensor_data_t data = sensor_read_all();
         
         if (data.is_valid) {
             count++;
@@ -45,9 +49,8 @@ void control_logic_task(void *pvParameters)
             }
             // Logic điều khiển
             if (data.temperature > 35.0) {
-                fan_speed(100);
-            } else if (data.temperature > 30.0) {
-                fan_speed(60);
+                fan_on();
+            
             } else {
                 fan_off();
             }
@@ -59,7 +62,13 @@ void control_logic_task(void *pvParameters)
             }
             
             if (data.co2_ppm > CO2_THRESHOLD) {
-                buzzer_beep(3);
+                // Beep 3 times using whistle API (non-blocking simplification)
+                for (int i = 0; i < 3; ++i) {
+                    whistle_on();
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+                    whistle_off();
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
             }
         }
         
@@ -83,7 +92,7 @@ void app_main(void)
     
     // 2. Khởi tạo phần cứng và sensors
     device_init();
-    sensor_init();
+    sensor_control_init();
     
     // 3. Khởi động MQTT (Cần tham số room_id)
     ESP_LOGI(TAG, "Starting MQTT...");

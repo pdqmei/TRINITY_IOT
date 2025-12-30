@@ -1,33 +1,22 @@
 #include "fan.h"
+#include "device_control.h"
 #include "driver/gpio.h"
-#include "esp_log.h"
 
-
-static const char *TAG = "FAN"; 
-
-void fan_on(void)
-{
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 255); 
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    ESP_LOGI(TAG, "🌀 Fan ON (100%%)");
+void fan_init(void) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << FAN_PIN),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
 }
 
-void fan_off(void)
-{
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    ESP_LOGI(TAG, "🌀 Fan OFF");
+void fan_on(void) {
+    gpio_set_level(FAN_PIN, 1);
 }
 
-void fan_speed(int speed)
-{
-    if (speed < 0)
-        speed = 0;
-    if (speed > 100)
-        speed = 100;
-
-    int duty = (speed * 255) / 100;
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    ESP_LOGI(TAG, "🌀 Fan speed: %d%%", speed);
+void fan_off(void) {
+    gpio_set_level(FAN_PIN, 0);
 }

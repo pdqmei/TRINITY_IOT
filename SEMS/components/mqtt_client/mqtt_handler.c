@@ -100,16 +100,16 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "MQTT Connected! Room: %s", room_id);
             is_connected = true;
             
-            // Subscribe các topic điều khiển
-            build_topic(topic_buffer, "actuators", "fan", "set");
+            
+            build_topic(topic_buffer, "actuators", "fan", "state"); 
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             
-            build_topic(topic_buffer, "actuators", "led", "set");
+            build_topic(topic_buffer, "actuators", "led", "state");  
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             
-            build_topic(topic_buffer, "actuators", "whistle", "set");
+            build_topic(topic_buffer, "actuators", "whistle", "state");  
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             break;
@@ -145,10 +145,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 // ==================== SỬA: mqtt_app_start với room_id ====================
 void mqtt_app_start(const char *custom_room_id)
 {
-    // Cập nhật room_id nếu được cung cấp
     if (custom_room_id != NULL) {
         strncpy(room_id, custom_room_id, sizeof(room_id) - 1);
-        room_id[sizeof(room_id) - 1] = '\0';  // Đảm bảo null-terminated
+        room_id[sizeof(room_id) - 1] = '\0';
     }
     
     esp_mqtt_client_config_t mqtt_cfg = {
@@ -156,6 +155,10 @@ void mqtt_app_start(const char *custom_room_id)
         .broker.address.port = MQTT_PORT,
         .credentials.username = MQTT_USERNAME,
         .credentials.authentication.password = MQTT_PASSWORD,
+        
+        // ========== THÊM: Nếu dùng TLS (port 8883) ==========
+        .broker.verification.certificate = NULL,  // Dùng cert mặc định
+        .broker.verification.skip_cert_common_name_check = false,
     };
     
     client = esp_mqtt_client_init(&mqtt_cfg);
@@ -165,7 +168,6 @@ void mqtt_app_start(const char *custom_room_id)
     
     ESP_LOGI(TAG, "MQTT started for room: %s", room_id);
 }
-
 // ==================== SỬA: Publish sensors với topic động ====================
 void mqtt_publish_sensor_data(sensor_data_t data)
 {
