@@ -12,7 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define LEDC_TIMER          LEDC_TIMER_0
+#define LEDC_TIMER          LEDC_TIMER_1
 #define LEDC_MODE           LEDC_LOW_SPEED_MODE
 #define LEDC_DUTY_RES       LEDC_TIMER_10_BIT
 #define LEDC_FREQUENCY      5000
@@ -21,9 +21,9 @@
 #define LED_GREEN_GPIO      GPIO_NUM_26
 #define LED_BLUE_GPIO       GPIO_NUM_27
 
-#define LEDC_CH_RED         LEDC_CHANNEL_0
-#define LEDC_CH_GREEN       LEDC_CHANNEL_1
-#define LEDC_CH_BLUE        LEDC_CHANNEL_2
+#define LEDC_CH_RED         LEDC_CHANNEL_1
+#define LEDC_CH_GREEN       LEDC_CHANNEL_2
+#define LEDC_CH_BLUE        LEDC_CHANNEL_3
 
 static uint8_t led_state = 0; // 0 = off, 1 = on
 

@@ -13,9 +13,9 @@
 #include "app_config.h"
 #include "wifi_manager.h"
 #include "mqtt_handler.h"
-#include "fan.h"
-#include "led.h"
-#include "whistle.h"
+#include "fan_control.h"
+#include "led_rgb.h"
+#include "buzzer.h"
 #include "sht31.h"
 #include "mq135.h"
 #include "moving_average.h"
@@ -135,7 +135,7 @@ static void actuator_task(void *pvParameters)
     // initial states
     fan_init();
     led_init();
-    whistle_init();
+    buzzer_init();
 
     while (1) {
         // Wait for sensor ready event
@@ -188,10 +188,10 @@ static void actuator_task(void *pvParameters)
             if (latest_temp > 35.0f) {
                 // rapid beep and red blink
                 for (int i = 0; i < 5; i++) {
-                    whistle_on();
-                    led_set_rgb(1023, 0, 0);
-                    vTaskDelay(pdMS_TO_TICKS(50));
-                    whistle_off();
+                    buzzer_on();
+                        led_set_rgb(1023, 0, 0);
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        buzzer_off();
                     led_set_rgb(0, 0, 0);
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
@@ -210,14 +210,14 @@ static void actuator_task(void *pvParameters)
             // Buzzer patterns
             if (latest_air_level >= 3) {
                 // beep every 5s (100ms on/off) - implement single beep here
-                whistle_beep(1);
+                buzzer_beep(1);
             }
             if (latest_temp > 35.0f) {
                 // continuous rapid beep for a short burst
                 for (int i = 0; i < 10; i++) {
-                    whistle_on();
+                    buzzer_on();
                     vTaskDelay(pdMS_TO_TICKS(50));
-                    whistle_off();
+                    buzzer_off();
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
             }
@@ -266,7 +266,7 @@ void app_main(void)
     // init peripherals (fan/led/buzzer/sensors)
     fan_init();
     led_init();
-    whistle_init();
+    buzzer_init();
     sht31_init();
     mq135_init();
 
