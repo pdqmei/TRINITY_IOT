@@ -1,4 +1,2 @@
-idf_component_register(
-    SRCS "moving_average.c"
-    INCLUDE_DIRS "."
-)
+# This file is empty. 
+# It can be used to add custom build rules for the application components if needed.

@@ -1,16 +1,7 @@
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
-    REQUIRES 
-        freertos
-        esp_log
-        nvs_flash
-        driver
-        esp_wifi
-        esp_event
-        esp_netif
-        esp_mqtt
-        esp_adc_cal
+    REQUIRES
         fan
         led
         whistle

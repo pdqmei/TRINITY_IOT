@@ -1,9 +1,24 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 
-project(TRINITY_IOT)
+set(EXTRA_COMPONENT_DIRS
 
-set(CMAKE_CXX_STANDARD 11)
+    # Add actuator components here
+    components/actuators/fan
+    components/actuators/led
+    components/actuators/whistle
+
+    # Add sensor components here
+    components/sensors/sht31
+    components/sensors/mq135
+
+    # Add connectivity components here
+    components/connectivity/wifi_manager
+    components/connectivity/mqtt_handler
+
+    # Add utility components here
+    components/utils/moving_average
+)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-project_start(app)
+project(TRINITY_IOT)
