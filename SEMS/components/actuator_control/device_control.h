@@ -8,7 +8,9 @@
 #define FAN_PIN         GPIO_NUM_27     // Quạt DC (qua transistor)
 
 void device_init(void);
-
+void control_fan(bool state, int level);
+void control_led(bool state, int level);
+void control_whistle(bool state, int level);
 
 
 #endif

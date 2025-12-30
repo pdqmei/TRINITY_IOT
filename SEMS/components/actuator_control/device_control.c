@@ -19,3 +19,17 @@ void device_init(void)
 
     ESP_LOGI(TAG, "All devices initialized");
 }
+void control_fan(bool state, int level)
+{
+    ESP_LOGI(TAG, "Fan %s level %d", state ? "ON" : "OFF", level);
+}
+
+void control_led(bool state, int level)
+{
+    ESP_LOGI(TAG, "LED %s level %d", state ? "ON" : "OFF", level);
+}
+
+void control_whistle(bool state, int level)
+{
+    ESP_LOGI(TAG, "Whistle %s level %d", state ? "ON" : "OFF", level);
+}
