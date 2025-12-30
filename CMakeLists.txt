@@ -5,7 +5,7 @@ set(EXTRA_COMPONENT_DIRS
     # Add actuator components here
     components/actuators/fan
     components/actuators/led
-    components/actuators/whistle
+    components/actuators/buzzer
 
     # Add sensor components here
     components/sensors/sht31

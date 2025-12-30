@@ -17,7 +17,7 @@ TRINITY_IOT/
 │   ├── CMakeLists.txt         # Main component CMake
 │   └── idf_component.yml      # Component definition
 ├── components/
-│   ├── actuator_control/      # Actuators (Fan, LED, Whistle)
+│   ├── actuator_control/      # Actuators (Fan, LED, Buzzer)
 │   ├── sensor_readings/       # Sensors (SHT31, MQ135)
 │   ├── wifi_manager/          # WiFi handler
 │   └── mqtt_client/           # MQTT handler
@@ -28,7 +28,7 @@ TRINITY_IOT/
 ## Hardware Connections
 - Fan PWM: GPIO 18
 - LED: GPIO 19
-- Whistle/Buzzer: GPIO 21
+- Buzzer: GPIO 21
 - SHT31 I2C: SDA=GPIO 21, SCL=GPIO 22
 - MQ135 ADC: GPIO 36 (ADC1_0)
 

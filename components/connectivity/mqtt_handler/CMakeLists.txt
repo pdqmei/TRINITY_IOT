@@ -4,6 +4,7 @@ idf_component_register(
     REQUIRES
     mqtt
     esp_event
+    json
     driver
     freertos
 )

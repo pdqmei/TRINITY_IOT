@@ -1,18 +1,18 @@
 /* Active buzzer controlled by GPIO (active LOW): LOW = ON, HIGH = OFF
- * Pin: PIN_BUZZER (see app_config.h) - mapped to GPIO17 per BOM
+ * Pin: PIN_BUZZER (see app_config.h)
  */
 
-#include "whistle.h"
+#include "buzzer.h"
 #include "app_config.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define WHISTLE_PIN PIN_BUZZER
+#define BUZZER_PIN PIN_BUZZER
 
-void whistle_init(void) {
+void buzzer_init(void) {
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << WHISTLE_PIN),
+        .pin_bit_mask = (1ULL << BUZZER_PIN),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -20,22 +20,22 @@ void whistle_init(void) {
     };
     gpio_config(&io_conf);
     // Active LOW -> set HIGH to keep buzzer off
-    gpio_set_level(WHISTLE_PIN, 1);
+    gpio_set_level(BUZZER_PIN, 1);
 }
 
-void whistle_on(void) {
-    gpio_set_level(WHISTLE_PIN, 0); // active low
+void buzzer_on(void) {
+    gpio_set_level(BUZZER_PIN, 0); // active low
 }
 
-void whistle_off(void) {
-    gpio_set_level(WHISTLE_PIN, 1);
+void buzzer_off(void) {
+    gpio_set_level(BUZZER_PIN, 1);
 }
 
-void whistle_beep(int count) {
+void buzzer_beep(int count) {
     for (int i = 0; i < count; i++) {
-        whistle_on();
+        buzzer_on();
         vTaskDelay(pdMS_TO_TICKS(200));
-        whistle_off();
+        buzzer_off();
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }

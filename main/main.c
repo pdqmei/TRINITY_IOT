@@ -15,7 +15,7 @@
 #include "mqtt_handler.h"
 #include "fan.h"
 #include "led.h"
-#include "whistle.h"
+#include "buzzer.h"
 #include "sht31.h"
 #include "mq135.h"
 #include "moving_average.h"
@@ -135,7 +135,7 @@ static void actuator_task(void *pvParameters)
     // initial states
     fan_init();
     led_init();
-    whistle_init();
+    buzzer_init();
 
     while (1) {
         // Wait for sensor ready event
@@ -188,10 +188,10 @@ static void actuator_task(void *pvParameters)
             if (latest_temp > 35.0f) {
                 // rapid beep and red blink
                 for (int i = 0; i < 5; i++) {
-                    whistle_on();
+                    buzzer_on();
                     led_set_rgb(1023, 0, 0);
                     vTaskDelay(pdMS_TO_TICKS(50));
-                    whistle_off();
+                    buzzer_off();
                     led_set_rgb(0, 0, 0);
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
@@ -210,14 +210,14 @@ static void actuator_task(void *pvParameters)
             // Buzzer patterns
             if (latest_air_level >= 3) {
                 // beep every 5s (100ms on/off) - implement single beep here
-                whistle_beep(1);
+                buzzer_beep(1);
             }
             if (latest_temp > 35.0f) {
                 // continuous rapid beep for a short burst
                 for (int i = 0; i < 10; i++) {
-                    whistle_on();
+                    buzzer_on();
                     vTaskDelay(pdMS_TO_TICKS(50));
-                    whistle_off();
+                    buzzer_off();
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
             }
@@ -240,9 +240,8 @@ static void mqtt_task(void *pvParameters)
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"%%\"}", latest_humi);
         mqtt_send_data("sensor/humidity", latest_humi);
 
-        snprintf(payload, sizeof(payload), "{\"level\":%d}", latest_air_level);
-        // publish sensor/air_quality as JSON using mqtt_send_data is float-based; use publish directly via internal API if available
-        esp_mqtt_client_publish(NULL, "sensor/air_quality", payload, 0, 1, 0);
+        // publish air quality as numeric value using mqtt helper
+        mqtt_send_data("sensor/air_quality", (float)latest_air_level);
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
     }
@@ -266,7 +265,7 @@ void app_main(void)
     // init peripherals (fan/led/buzzer/sensors)
     fan_init();
     led_init();
-    whistle_init();
+    buzzer_init();
     sht31_init();
     mq135_init();
 

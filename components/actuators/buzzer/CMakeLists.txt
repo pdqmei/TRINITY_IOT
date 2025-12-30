@@ -1,7 +1,8 @@
 idf_component_register(
-    SRCS "whistle.c"
+    SRCS "buzzer.c"
     INCLUDE_DIRS "."
     REQUIRES
+    main
     driver
     freertos
 )
