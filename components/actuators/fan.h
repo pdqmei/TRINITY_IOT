@@ -6,6 +6,6 @@
 void fan_init(void);
 void fan_on(void);
 void fan_off(void);
-void fan_set_speed(uint8_t speed); // digital mapping: 0=off, >0=on
+void fan_set_speed(uint8_t speed); // speed 0-100 -> maps to 4 discrete levels
 
 #endif

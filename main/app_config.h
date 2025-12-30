@@ -7,11 +7,11 @@
 #define PIN_SHT31_SCL 22
 #define PIN_MQ135_ADC_CHANNEL ADC1_CHANNEL_0 // GPIO36
 
-#define PIN_FAN GPIO_NUM_18
+#define PIN_FAN GPIO_NUM_16
 #define PIN_LED_R GPIO_NUM_25
 #define PIN_LED_G GPIO_NUM_26
 #define PIN_LED_B GPIO_NUM_27
-#define PIN_BUZZER GPIO_NUM_23 // active LOW
+#define PIN_BUZZER GPIO_NUM_17 // active LOW
 
 // MQTT Broker (public test broker)
 #define MQTT_BROKER_URI "mqtt://broker.hivemq.com"

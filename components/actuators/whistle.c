@@ -1,13 +1,14 @@
 /* Active buzzer controlled by GPIO (active LOW): LOW = ON, HIGH = OFF
- * Pin: GPIO23
+ * Pin: PIN_BUZZER (see app_config.h) - mapped to GPIO17 per BOM
  */
 
 #include "whistle.h"
+#include "app_config.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define WHISTLE_PIN GPIO_NUM_23
+#define WHISTLE_PIN PIN_BUZZER
 
 void whistle_init(void) {
     gpio_config_t io_conf = {

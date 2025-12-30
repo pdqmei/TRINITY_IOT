@@ -21,15 +21,15 @@ Sơ đồ kết nối (ASCII)
 
     ESP32 GPIO36 (ADC1_CH0) ---- MQ135 analog out
 
-    ESP32 GPIO18 ----| Gate MOSFET (IRF540N) ---- Fan 5V
-                     | (10k resistor between GPIO and Gate)
+    ESP32 GPIO16 ----| Gate MOSFET (IRF540N) ---- Fan 5V
+             | (10k resistor between GPIO and Gate)
 
     ESP32 GPIO25 ---- Resistor(220Ω) ---- LED RED
     ESP32 GPIO26 ---- Resistor(220Ω) ---- LED GREEN
     ESP32 GPIO27 ---- Resistor(220Ω) ---- LED BLUE
     LED common cathode ---- GND
 
-    ESP32 GPIO23 ---- Buzzer (active LOW) ---- Buzzer VCC 5V
+    ESP32 GPIO17 ---- Buzzer (active LOW) ---- Buzzer VCC 5V
 
 Build
 -----

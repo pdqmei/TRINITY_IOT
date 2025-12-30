@@ -1,0 +1,7 @@
+-- The C compiler identification is Clang 18.1.2
+-- The CXX compiler identification is Clang 18.1.2
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - failed
+-- Check for working C compiler: C:/Espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin/clang.exe
+-- Check for working C compiler: C:/Espressif/tools/esp-clang/esp-18.1.2_20240912/esp-clang/bin/clang.exe - broken
+-- Configuring incomplete, errors occurred!
