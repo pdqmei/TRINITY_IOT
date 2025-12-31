@@ -36,6 +36,9 @@ static TaskHandle_t mqtt_task_handle = NULL;
 static float latest_temp = 0.0f;
 static float latest_humi = 0.0f;
 static int latest_air_level = 0; // 0-4
+// last MQ135 readings for debug/logging
+static int latest_mq_raw = 0;
+static float latest_mq_ppm = 0.0f;
 
 // Event group for signalling between tasks
 static EventGroupHandle_t sys_event_group;
@@ -44,16 +47,6 @@ enum {
     EVT_WIFI_CONNECTED = BIT1,
     EVT_MQTT_CONNECTED = BIT2,
 };
-
-// Map ADC raw 0-4095 to air quality level per spec
-static int map_adc_to_level(int raw)
-{
-    if (raw <= 819) return 0;
-    if (raw <= 1638) return 1;
-    if (raw <= 2457) return 2;
-    if (raw <= 3276) return 3;
-    return 4;
-}
 
 // Read SHT31 with retry (3 attempts). Return true if success.
 static bool read_sht31_with_retry(sht31_data_t *out)
@@ -111,13 +104,46 @@ static void sensor_task(void *pvParameters)
             latest_humi = ma_get(&ma_humi);
         }
 
+
         if (!mq_ok) {
             ESP_LOGE(TAG, "MQ135 read failed, using last value");
         } else {
-            int level = map_adc_to_level(mq_raw);
+            // Đọc PPM 1 lần duy nhất
+            float ppm = mq135_read_ppm();
+            
+            // Tính level dựa trên PPM hoặc raw ADC
+            int level;
+            if (ppm >= 0.0f) {
+                // Có PPM, tự tính level
+                if (ppm < 400) level = 0;
+                else if (ppm < 600) level = 1;
+                else if (ppm < 800) level = 2;
+                else if (ppm < 1000) level = 3;
+                else level = 4;
+            } else {
+                // Không có PPM, dùng raw ADC threshold
+                if (mq_raw <= 819) level = 0;
+                else if (mq_raw <= 1638) level = 1;
+                else if (mq_raw <= 2457) level = 2;
+                else if (mq_raw <= 3276) level = 3;
+                else level = 4;
+            }
+            
             ma_add(&ma_air, (float)level);
             latest_air_level = (int)ma_get(&ma_air);
+
+            // Save values
+            latest_mq_raw = mq_raw;
+            latest_mq_ppm = (ppm >= 0.0f) ? ppm : 0.0f;
+
+            // Log
+            if (ppm >= 0.0f) {
+                ESP_LOGI(TAG, "MQ135: ADC raw=%d, PPM=%.2f, AQ level=%d", mq_raw, ppm, level);
+            } else {
+                ESP_LOGI(TAG, "MQ135: ADC raw=%d, PPM=N/A (uncalibrated), AQ level=%d", mq_raw, level);
+            }
         }
+
 
         // Signal actuator task that new sensor data is available
         xEventGroupSetBits(sys_event_group, EVT_SENSOR_READY);
@@ -241,6 +267,7 @@ static void mqtt_task(void *pvParameters)
         mqtt_send_data("sensor/humidity", latest_humi);
 
         // publish air quality as numeric value using mqtt helper
+        ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
         mqtt_send_data("sensor/air_quality", (float)latest_air_level);
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
@@ -259,6 +286,9 @@ void app_main(void)
 
     ESP_LOGI(TAG, "TRINITY_IOT - Environment Monitor starting");
 
+    // ensure MQ135 component logs are visible
+    esp_log_level_set("MQ135", ESP_LOG_INFO);
+
     // init shared event group
     sys_event_group = xEventGroupCreate();
 
@@ -268,6 +298,24 @@ void app_main(void)
     buzzer_init();
     sht31_init();
     mq135_init();
+
+    // ============ MQ135 CALIBRATION ============
+    ESP_LOGI(TAG, "Waiting 30 seconds for MQ135 to warm up...");
+    ESP_LOGI(TAG, "Please ensure sensor is in CLEAN AIR during this time!");
+    vTaskDelay(pdMS_TO_TICKS(30000));  // Đợi 30 giây
+    
+    if (!mq135_has_calibration()) {
+        ESP_LOGI(TAG, "Starting MQ135 calibration (this will take ~3 seconds)...");
+        esp_err_t cal_result = mq135_calibrate();
+        if (cal_result == ESP_OK) {
+            ESP_LOGI(TAG, "✓ MQ135 calibration successful!");
+        } else {
+            ESP_LOGW(TAG, "✗ MQ135 calibration failed, will use fallback ADC thresholds");
+        }
+    } else {
+        ESP_LOGI(TAG, "MQ135 already calibrated");
+    }
+    // ===========================================
 
     // WiFi
     wifi_init();
