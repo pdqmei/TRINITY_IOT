@@ -5,6 +5,7 @@
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
+#include "esp_crt_bundle.h"
 
 static const char *TAG = "MQTT";
 static esp_mqtt_client_handle_t client = NULL;
@@ -17,7 +18,7 @@ static char room_id[32] = "bedroom";  // Default room
 extern void control_fan(bool state, int level);
 extern void control_led(bool state, int level);
 extern void control_whistle(bool state, int level);
-
+extern bool g_is_manual_mode;
 // ==================== GIỮ NGUYÊN: build_topic ====================
 static void build_topic(char *buffer, const char *category, 
                        const char *device, const char *action) {
@@ -101,15 +102,15 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             is_connected = true;
             
             
-            build_topic(topic_buffer, "actuators", "fan", "state"); 
+            build_topic(topic_buffer, "actuators", "fan", "set"); 
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             
-            build_topic(topic_buffer, "actuators", "led", "state");  
+            build_topic(topic_buffer, "actuators", "led", "set");  
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             
-            build_topic(topic_buffer, "actuators", "whistle", "state");  
+            build_topic(topic_buffer, "actuators", "whistle", "set");  
             esp_mqtt_client_subscribe(client, topic_buffer, 1);
             ESP_LOGI(TAG, "Subscribed: %s", topic_buffer);
             break;
@@ -124,13 +125,29 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             break;
             
         case MQTT_EVENT_DATA:
-            ESP_LOGI(TAG, "Received command:");
-            ESP_LOGI(TAG, "  Topic: %.*s", event->topic_len, event->topic);
-            ESP_LOGI(TAG, "  Data: %.*s", event->data_len, event->data);
+            memset(topic_buffer, 0, sizeof(topic_buffer));
+            strncpy(topic_buffer, event->topic, 
+            event->topic_len < sizeof(topic_buffer) - 1 ? 
+            event->topic_len : sizeof(topic_buffer) - 1);
+            if (strstr(topic_buffer, "/set")) {
+                
+                g_is_manual_mode = true; // Chuyển sang Manual ngay khi Web có lệnh
+                ESP_LOGI(TAG, "Web command received. Switched to MANUAL mode.");
+                ESP_LOGI(TAG, "Received command:");
+                ESP_LOGI(TAG, "  Topic: %.*s", event->topic_len, event->topic);
+                ESP_LOGI(TAG, "  Data: %.*s", event->data_len, event->data);
+                
+                // Xử lý lệnh điều khiển
+                handle_control_command(event->topic, event->topic_len,
+                                    event->data, event->data_len);
+                }
+    
+            //else {
+             //   g_is_manual_mode = false; // Trả quyền cho hệ thống tự động
+             //   ESP_LOGI(TAG, "Switched to AUTO mode.");
+            //}
+    
             
-            // Xử lý lệnh điều khiển
-            handle_control_command(event->topic, event->topic_len,
-                                  event->data, event->data_len);
             break;
             
         case MQTT_EVENT_ERROR:
@@ -157,7 +174,7 @@ void mqtt_app_start(const char *custom_room_id)
         .credentials.authentication.password = MQTT_PASSWORD,
         
         // ========== THÊM: Nếu dùng TLS (port 8883) ==========
-        .broker.verification.certificate = NULL,  // Dùng cert mặc định
+        .broker.verification.crt_bundle_attach = esp_crt_bundle_attach,
         .broker.verification.skip_cert_common_name_check = false,
     };
     
