@@ -7,7 +7,7 @@
 #define PIN_LED_RED    25
 #define PIN_LED_GREEN  26
 #define PIN_LED_BLUE   27
-#define PIN_BUZZER     17
+#define PIN_BUZZER     19
 #define PIN_SHT31_SDA  21
 #define PIN_SHT31_SCL  22
 #define PIN_MQ135      36
