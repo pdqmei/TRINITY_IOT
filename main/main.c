@@ -167,29 +167,66 @@ static void actuator_task(void *pvParameters)
         // Wait for sensor ready event
         EventBits_t bits = xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
         if (bits & EVT_SENSOR_READY) {
-            ESP_LOGI(TAG, "Actuator update: T=%.2f H=%.2f AQ=%d", latest_temp, latest_humi, latest_air_level);
+            ESP_LOGI(TAG, "===== Actuator Control Start =====");
+            ESP_LOGI(TAG, "Sensors: T=%.2f°C, H=%.2f%%, AQ Level=%d", latest_temp, latest_humi, latest_air_level);
 
-            // Fan control: ON if >=25C, OFF otherwise
-            if (latest_temp >= 25.0f) {
-                fan_on();
-                mqtt_send_data("status/fan", 1.0f);
-            } else {
+            // ========== FAN CONTROL (4 levels based on temperature) ==========
+            uint8_t fan_speed = 0;
+            float fan_status = 0.0f;
+
+            if (latest_temp < 25.0f) {
+                // Level 0: OFF
+                fan_speed = 0;
+                fan_status = 0.0f;
+                ESP_LOGI(TAG, "[FAN] Level 0 - OFF (T=%.2f°C < 25°C)", latest_temp);
                 fan_off();
-                mqtt_send_data("status/fan", 0.0f);
+            } 
+            else if (latest_temp < 28.0f) {
+                // Level 1: 40% (25-28°C)
+                fan_speed = 40;
+                fan_status = 0.4f;
+                ESP_LOGI(TAG, "[FAN] Level 1 - 40%% (T=%.2f°C, range: 25-28°C)", latest_temp);
+                fan_set_speed(fan_speed);
+            } 
+            else if (latest_temp < 31.0f) {
+                // Level 2: 70% (28-31°C)
+                fan_speed = 70;
+                fan_status = 0.7f;
+                ESP_LOGI(TAG, "[FAN] Level 2 - 70%% (T=%.2f°C, range: 28-31°C)", latest_temp);
+                fan_set_speed(fan_speed);
+            } 
+            else {
+                // Level 3: 100% (>=31°C)
+                fan_speed = 100;
+                fan_status = 1.0f;
+                ESP_LOGI(TAG, "[FAN] Level 3 - 100%% (T=%.2f°C >= 31°C)", latest_temp);
+                fan_on();
             }
 
-            // LED control based on air quality
+            mqtt_send_data("status/fan", fan_status);
+
+            // ========== LED CONTROL (Based on Air Quality) ==========
+            const char* aq_desc[] = {"Good", "Fair", "Moderate", "Poor", "Very Poor"};
+            ESP_LOGI(TAG, "[LED] Air Quality Level %d (%s)", latest_air_level, aq_desc[latest_air_level]);
+            
             switch (latest_air_level) {
-                case 0: // Green
+                case 0: // Green - Good air
+                    ESP_LOGI(TAG, "[LED] Setting GREEN (R=0, G=1023, B=0)");
                     led_set_rgb(0, 1023, 0);
                     break;
-                case 1: // Yellow (R=255,G=255,B=0)
+                    
+                case 1: // Yellow - Fair air
+                    ESP_LOGI(TAG, "[LED] Setting YELLOW (R=1023, G=1023, B=0)");
                     led_set_rgb(1023, 1023, 0);
                     break;
-                case 2: // Orange (R=255,G=165,B=0) - map 165/255 ~ 662/1023
+                    
+                case 2: // Orange - Moderate air
+                    ESP_LOGI(TAG, "[LED] Setting ORANGE (R=1023, G=662, B=0)");
                     led_set_rgb(1023, 662, 0);
                     break;
-                case 3: // Red blink 500ms
+                    
+                case 3: // Red blink - Poor air
+                    ESP_LOGW(TAG, "[LED] RED BLINK mode (500ms cycle x2)");
                     for (int i = 0; i < 2; i++) {
                         led_set_rgb(1023, 0, 0);
                         vTaskDelay(pdMS_TO_TICKS(500));
@@ -197,7 +234,9 @@ static void actuator_task(void *pvParameters)
                         vTaskDelay(pdMS_TO_TICKS(500));
                     }
                     break;
-                case 4: // Purple blink fast 200ms
+                    
+                case 4: // Purple blink fast - Very poor air
+                    ESP_LOGE(TAG, "[LED] PURPLE BLINK FAST mode (200ms cycle x3)");
                     for (int i = 0; i < 3; i++) {
                         led_set_rgb(1023, 0, 1023);
                         vTaskDelay(pdMS_TO_TICKS(200));
@@ -205,13 +244,18 @@ static void actuator_task(void *pvParameters)
                         vTaskDelay(pdMS_TO_TICKS(200));
                     }
                     break;
+                    
                 default:
+                    ESP_LOGW(TAG, "[LED] Unknown level, turning OFF");
                     led_set_rgb(0, 0, 0);
                     break;
             }
 
-            // Temperature overlay effects
+            // ========== TEMPERATURE OVERLAY EFFECTS ==========
             if (latest_temp > 35.0f) {
+                ESP_LOGE(TAG, "[ALERT] CRITICAL Temperature > 35°C! Activating emergency pattern!");
+                ESP_LOGE(TAG, "[BUZZER] Rapid beep pattern (50ms x10)");
+                ESP_LOGE(TAG, "[LED] Rapid red flash pattern");
                 // rapid beep and red blink
                 for (int i = 0; i < 5; i++) {
                     buzzer_on();
@@ -222,6 +266,7 @@ static void actuator_task(void *pvParameters)
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
             } else if (latest_temp > 30.0f) {
+                ESP_LOGW(TAG, "[LED] Temperature > 30°C: Activating breathing red effect (2s cycle)");
                 // breathing red effect (fade in/out 2s)
                 for (int step = 0; step <= 1023; step += 16) {
                     led_set_rgb(step, 0, 0);
@@ -231,15 +276,17 @@ static void actuator_task(void *pvParameters)
                     led_set_rgb(step, 0, 0);
                     vTaskDelay(pdMS_TO_TICKS(2000 / (1023/16 + 1)));
                 }
+                ESP_LOGI(TAG, "[LED] Breathing effect completed");
             }
 
-            // Buzzer patterns
+            // ========== BUZZER PATTERNS ==========
             if (latest_air_level >= 3) {
-                // beep every 5s (100ms on/off) - implement single beep here
+                ESP_LOGW(TAG, "[BUZZER] Warning beep (AQ level %d >= 3)", latest_air_level);
                 buzzer_beep(1);
             }
+            
             if (latest_temp > 35.0f) {
-                // continuous rapid beep for a short burst
+                ESP_LOGE(TAG, "[BUZZER] Continuous rapid beep for critical temperature");
                 for (int i = 0; i < 10; i++) {
                     buzzer_on();
                     vTaskDelay(pdMS_TO_TICKS(50));
@@ -247,6 +294,8 @@ static void actuator_task(void *pvParameters)
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
             }
+            
+            ESP_LOGI(TAG, "===== Actuator Control End =====");
         }
     }
 }

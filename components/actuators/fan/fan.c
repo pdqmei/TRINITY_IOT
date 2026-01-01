@@ -1,11 +1,4 @@
 /*
- * Fan driver adapted for simple ON/OFF control via GPIO (MOSFET gate).
- * Hardware: Fan controlled through MOSFET on GPIO18. Fan does not support PWM.
- * GPIO18 HIGH -> fan ON (MOSFET gate driven), LOW -> fan OFF.
- * fan_set_speed() treats any non-zero speed as ON.
- */
-
-/*
  * Fan driver with 4 discrete PWM levels using LEDC.
  * Hardware: Fan controlled through MOSFET on configured PIN_FAN (see app_config.h).
  * Levels: 0..3 (4 levels). fan_set_speed(0-100) maps to nearest level.
@@ -15,6 +8,9 @@
 #include "app_config.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#include "esp_log.h"
+
+static const char *TAG = "FAN";
 
 #define FAN_LEDC_TIMER      LEDC_TIMER_1
 #define FAN_LEDC_MODE       LEDC_LOW_SPEED_MODE
@@ -47,6 +43,9 @@ static void fan_ledc_init(void)
         .flags.output_invert = 0,
     };
     ledc_channel_config(&ledc_channel);
+    
+    ESP_LOGI(TAG, "LEDC configured: Timer=%d, Channel=%d, GPIO=%d, Freq=%dHz", 
+             FAN_LEDC_TIMER, FAN_LEDC_CHANNEL, FAN_PIN, FAN_LEDC_FREQ_HZ);
 }
 
 void fan_init(void) {
@@ -55,15 +54,19 @@ void fan_init(void) {
     // ensure fan off
     ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, 0);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
+    
+    ESP_LOGI(TAG, "Fan initialized on pin %d (PWM 4-level control)", FAN_PIN);
 }
 
 void fan_on(void) {
     // set to max duty (level 3)
+    ESP_LOGI(TAG, "Fan ON - Level 3 (duty=%lu/1023 = 100%%)", fan_duties[3]);
     ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[3]);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
 }
 
 void fan_off(void) {
+    ESP_LOGI(TAG, "Fan OFF - Level 0 (duty=0)");
     ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[0]);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
 }
@@ -71,15 +74,23 @@ void fan_off(void) {
 void fan_set_speed(uint8_t speed) {
     // speed: 0-100 -> map to 4 levels
     if (speed == 0) {
+        ESP_LOGI(TAG, "fan_set_speed(%d%%) -> Calling fan_off()", speed);
         fan_off();
         return;
     }
+    
     // Determine level 1..3
     uint8_t level = 1;
     if (speed <= 33) level = 1;
     else if (speed <= 66) level = 2;
     else level = 3;
 
-    ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[level]);
+    uint32_t duty = fan_duties[level];
+    uint8_t duty_percent = (duty * 100) / 1023;
+    
+    ESP_LOGI(TAG, "fan_set_speed(%d%%) -> Level %d (duty=%lu/1023 = %d%%)", 
+             speed, level, duty, duty_percent);
+    
+    ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, duty);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
 }
