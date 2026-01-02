@@ -8,6 +8,7 @@ idf_component_register(
         buzzer
         sht31
         mq135
+        lcd1602
         moving_average
         wifi_manager
         mqtt_handler

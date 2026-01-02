@@ -7,7 +7,8 @@
  */
 
 #include "lcd1602.h"
-#include "i2c_config.h"
+#include "driver/i2c.h"
+#include "app_config.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +22,14 @@ static const char *TAG = "LCD";
 #define En 0x04
 #define Rs 0x01
 
+// I2C configuration for LCD (shares I2C bus with SHT31)
+#define I2C_MASTER_NUM     I2C_NUM_0
+#define I2C_MASTER_FREQ_HZ 400000
+#define I2C_MASTER_SDA_IO  PIN_SHT31_SDA
+#define I2C_MASTER_SCL_IO  PIN_SHT31_SCL
+
 static uint8_t lcd_address = 0x27;
+static bool lcd_initialized = false;
 
 // Forward declarations
 static void lcd_set_cursor(uint8_t row, uint8_t col);
@@ -97,9 +105,15 @@ static void lcd_print(const char *str)
 
 void lcd_init(void)
 {
-    ESP_LOGI(TAG, "Scanning I2C bus...");
+    // Avoid re-initializing if already done
+    if (lcd_initialized) {
+        ESP_LOGI(TAG, "LCD already initialized");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Scanning I2C bus for LCD...");
     
-    // Scan common addresses
+    // Scan common addresses for LCD with PCF8574
     uint8_t addresses[] = {0x27, 0x3F, 0x20, 0x38};
     bool found = false;
     
@@ -113,14 +127,14 @@ void lcd_init(void)
     }
     
     if (!found) {
-        ESP_LOGE(TAG, "LCD not found! Check wiring!");
+        ESP_LOGE(TAG, "LCD not found! Check wiring and I2C address!");
         return;
     }
     
-    ESP_LOGI(TAG, "Initializing LCD...");
+    ESP_LOGI(TAG, "Initializing LCD at 0x%02X...", lcd_address);
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // Initialization sequence
+    // Initialization sequence for 4-bit mode
     lcd_write_nibble(0x30);
     vTaskDelay(pdMS_TO_TICKS(5));
     
@@ -133,13 +147,15 @@ void lcd_init(void)
     lcd_write_nibble(0x20);
     esp_rom_delay_us(150);
     
+    // Configure LCD settings
     lcd_cmd(0x28);  // 4-bit, 2 lines, 5x8
     lcd_cmd(0x08);  // Display OFF
-    lcd_cmd(0x01);  // Clear
+    lcd_cmd(0x01);  // Clear display
     vTaskDelay(pdMS_TO_TICKS(2));
-    lcd_cmd(0x06);  // Entry mode
-    lcd_cmd(0x0C);  // Display ON
+    lcd_cmd(0x06);  // Entry mode: increment address, no shift
+    lcd_cmd(0x0C);  // Display ON, cursor OFF
     
+    lcd_initialized = true;
     ESP_LOGI(TAG, "LCD initialized successfully!");
     
     // Test message
@@ -153,6 +169,10 @@ void lcd_init(void)
 
 void lcd_clear(void)
 {
+    if (!lcd_initialized) {
+        ESP_LOGW(TAG, "LCD not initialized");
+        return;
+    }
     lcd_cmd(0x01);
     vTaskDelay(pdMS_TO_TICKS(2));
 }
@@ -168,12 +188,17 @@ void lcd_clear(void)
  * Row 0: T:23.5C H:65.2%
  * Row 1: AQ:Good   450ppm
  *        AQ:Fair   580ppm
- *        AQ:Moderate 750
+ *        AQ:Mod    750ppm
  *        AQ:Poor   950ppm
  *        AQ:V.Poor 1200p
  */
 void lcd_display_all(float temp, float hum, int air_level, float ppm)
 {
+    if (!lcd_initialized) {
+        ESP_LOGW(TAG, "LCD not initialized");
+        return;
+    }
+
     char line1[17], line2[17];
     
     // Row 0: Temperature and Humidity
@@ -189,13 +214,8 @@ void lcd_display_all(float temp, float hum, int air_level, float ppm)
     
     if (ppm >= 0.0f && ppm < 10000.0f) {
         // Show PPM if available and valid
-        if (air_level <= 2) {
-            // Short labels: "AQ:Good   450ppm"
-            snprintf(line2, sizeof(line2), "AQ:%-6s%4.0fp", aq_labels[air_level], ppm);
-        } else {
-            // Long labels: "AQ:Poor   950ppm"
-            snprintf(line2, sizeof(line2), "AQ:%-6s%4.0fp", aq_labels[air_level], ppm);
-        }
+        // Format: "AQ:Good   450ppm" (16 chars total)
+        snprintf(line2, sizeof(line2), "AQ:%-6s%4.0fp", aq_labels[air_level], ppm);
     } else {
         // PPM not available: "AQ:Good        "
         snprintf(line2, sizeof(line2), "AQ:%-12s", aq_labels[air_level]);
@@ -208,7 +228,7 @@ void lcd_display_all(float temp, float hum, int air_level, float ppm)
     lcd_set_cursor(1, 0);
     lcd_print(line2);
     
-    ESP_LOGI(TAG, "LCD: %.1fC %.1f%% AQ:%s %.0fppm", 
+    ESP_LOGD(TAG, "Display: T=%.1f°C H=%.1f%% AQ=%s PPM=%.0f", 
              temp, hum, aq_labels[air_level], ppm);
 }
 

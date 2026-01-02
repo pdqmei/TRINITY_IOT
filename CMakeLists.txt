@@ -10,6 +10,7 @@ set(EXTRA_COMPONENT_DIRS
     # Add sensor components here
     components/sensors/sht31
     components/sensors/mq135
+    components/sensors/lcd1602
 
     # Add connectivity components here
     components/connectivity/wifi_manager

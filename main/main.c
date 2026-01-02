@@ -1,5 +1,5 @@
-// Main application - FIXED: Buzzer debounce logic
-// Buzzer chỉ kêu khi CHUYỂN TRẠNG THÁI, không kêu liên tục
+// Main application - 4-Level Buzzer System + LCD Display
+// Buzzer: Level 0 (OFF) → Level 1 (5s) → Level 2 (2s x5) → Level 3 (1s x10)
 
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +19,7 @@
 #include "sht31.h"
 #include "mq135.h"
 #include "moving_average.h"
+#include "lcd1602.h"
 
 static const char *TAG = "MAIN";
 
@@ -31,6 +32,7 @@ static moving_average_t ma_air;
 static TaskHandle_t sensor_task_handle = NULL;
 static TaskHandle_t actuator_task_handle = NULL;
 static TaskHandle_t mqtt_task_handle = NULL;
+static TaskHandle_t lcd_task_handle = NULL;
 
 // Latest values
 static float latest_temp = 0.0f;
@@ -39,10 +41,16 @@ static int latest_air_level = 0;
 static int latest_mq_raw = 0;
 static float latest_mq_ppm = 0.0f;
 
-// 🔑 KEY FIX: Alert state tracking (để tránh kêu liên tục)
-static bool alert_temp_critical = false;  // temp > 35°C
-static bool alert_temp_high = false;      // temp > 30°C
-static bool alert_air_poor = false;       // air >= 3
+// ========== 4-LEVEL BUZZER SYSTEM ==========
+typedef enum {
+    BUZZER_OFF = 0,           // Tắt
+    BUZZER_WARN_5S = 1,       // Cảnh báo: kêu liên tục 5 giây
+    BUZZER_ALERT_2S_5X = 2,   // Nguy hiểm: kêu 2s, lặp 5 lần
+    BUZZER_CRITICAL_1S_10X = 3 // Nghiêm trọng: kêu 1s, lặp 10 lần liên tục
+} buzzer_level_t;
+
+static buzzer_level_t current_buzzer_level = BUZZER_OFF;
+static uint32_t buzzer_cycle_count = 0;
 
 // Event group
 static EventGroupHandle_t sys_event_group;
@@ -76,6 +84,80 @@ static bool read_mq135_with_retry(int *out_raw)
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     return false;
+}
+
+// ========== BUZZER PATTERN FUNCTIONS ==========
+static void buzzer_play_pattern(buzzer_level_t level)
+{
+    switch (level) {
+        case BUZZER_OFF:
+            buzzer_off();
+            ESP_LOGI(TAG, "[BUZZER] Level 0: OFF");
+            break;
+            
+        case BUZZER_WARN_5S:
+            // Level 1: Kêu liên tục 5 giây
+            ESP_LOGW(TAG, "[BUZZER] Level 1: WARNING - 5 seconds continuous beep");
+            buzzer_on();
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            buzzer_off();
+            break;
+            
+        case BUZZER_ALERT_2S_5X:
+            // Level 2: Kêu 2s, tắt 0.5s, lặp 5 lần
+            ESP_LOGW(TAG, "[BUZZER] Level 2: ALERT - 2s beep x 5 cycles");
+            for (int i = 0; i < 5; i++) {
+                ESP_LOGW(TAG, "  Alert cycle %d/5", i+1);
+                buzzer_on();
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                buzzer_off();
+                if (i < 4) {
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
+            }
+            break;
+            
+        case BUZZER_CRITICAL_1S_10X:
+            // Level 3: Kêu 1s, tắt 0.3s, lặp 10 lần
+            ESP_LOGE(TAG, "[BUZZER] Level 3: CRITICAL - 1s beep x 10 cycles CONTINUOUS!");
+            for (int i = 0; i < 10; i++) {
+                ESP_LOGE(TAG, "  CRITICAL cycle %d/10", i+1);
+                buzzer_on();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                buzzer_off();
+                if (i < 9) {
+                    vTaskDelay(pdMS_TO_TICKS(300));
+                }
+            }
+            break;
+            
+        default:
+            buzzer_off();
+            break;
+    }
+    
+    buzzer_off();  // Đảm bảo tắt
+}
+
+static buzzer_level_t calculate_buzzer_level(void)
+{
+    // Priority 1: CRITICAL TEMPERATURE (> 35°C) → Level 3
+    if (latest_temp > 35.0f) {
+        return BUZZER_CRITICAL_1S_10X;
+    }
+    
+    // Priority 2: VERY POOR AIR (level 4) → Level 2
+    if (latest_air_level >= 4) {
+        return BUZZER_ALERT_2S_5X;
+    }
+    
+    // Priority 3: HIGH TEMP (30-35°C) OR POOR AIR (level 3) → Level 1
+    if (latest_temp > 30.0f || latest_air_level >= 3) {
+        return BUZZER_WARN_5S;
+    }
+    
+    // No alert
+    return BUZZER_OFF;
 }
 
 static void sensor_task(void *pvParameters)
@@ -138,6 +220,36 @@ static void sensor_task(void *pvParameters)
 
         xEventGroupSetBits(sys_event_group, EVT_SENSOR_READY);
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_READ_INTERVAL_MS));
+    }
+}
+
+static void lcd_task(void *pvParameters)
+{
+    (void) pvParameters;
+    
+    ESP_LOGI(TAG, "LCD task started");
+    
+    TickType_t last_wake = xTaskGetTickCount();
+    
+    while (1) {
+        EventBits_t bits = xEventGroupWaitBits(
+            sys_event_group, 
+            EVT_SENSOR_READY, 
+            pdFALSE,
+            pdFALSE,
+            pdMS_TO_TICKS(1000)
+        );
+        
+        if (bits & EVT_SENSOR_READY) {
+            lcd_display_all(
+                latest_temp, 
+                latest_humi, 
+                latest_air_level, 
+                latest_mq_ppm
+            );
+        }
+        
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(2000));
     }
 }
 
@@ -228,101 +340,38 @@ static void actuator_task(void *pvParameters)
                     break;
             }
 
-            // ========== 🔑 BUZZER CONTROL - DEBOUNCED ALERTS ==========
-            // Chỉ kêu khi CHUYỂN từ OK → ALERT, không kêu lại nếu vẫn đang alert
+            // ========== 🔔 4-LEVEL BUZZER SYSTEM ==========
+            buzzer_level_t new_level = calculate_buzzer_level();
             
-            bool needs_alert = false;
-            
-            // Priority 1: Critical temperature (> 35°C)
-            if (latest_temp > 35.0f) {
-                if (!alert_temp_critical) {
-                    // Chuyển trạng thái: OK → CRITICAL
-                    ESP_LOGE(TAG, "[ALERT] CRITICAL TEMP > 35°C - FIRST TIME ALERT!");
-                    ESP_LOGE(TAG, "[BUZZER] 5 rapid beeps + LED flash");
-                    
-                    for (int i = 0; i < 5; i++) {
-                        buzzer_on();
-                        led_set_rgb(1023, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                        buzzer_off();
-                        led_set_rgb(0, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(100));
+            // Chỉ kêu khi CHUYỂN LEVEL hoặc lặp lại theo chu kỳ
+            if (new_level != current_buzzer_level) {
+                // Level thay đổi → kêu ngay
+                ESP_LOGI(TAG, "[BUZZER] Level changed: %d → %d", current_buzzer_level, new_level);
+                current_buzzer_level = new_level;
+                buzzer_cycle_count = 0;
+                
+                buzzer_play_pattern(current_buzzer_level);
+            } 
+            else if (current_buzzer_level != BUZZER_OFF) {
+                // Level không đổi nhưng vẫn đang alert → xét lặp lại
+                buzzer_cycle_count++;
+                
+                if (current_buzzer_level == BUZZER_CRITICAL_1S_10X) {
+                    // Level 3: Lặp mỗi 3 chu kỳ sensor (~30 giây)
+                    if (buzzer_cycle_count % 3 == 0) {
+                        ESP_LOGE(TAG, "[BUZZER] CRITICAL REPEAT - Iteration %lu", buzzer_cycle_count / 3);
+                        buzzer_play_pattern(BUZZER_CRITICAL_1S_10X);
                     }
-                    
-                    alert_temp_critical = true;
-                    needs_alert = true;
-                } else {
-                    ESP_LOGW(TAG, "[ALERT] Still critical temp (%.2f°C) - no buzzer", latest_temp);
+                } 
+                else if (current_buzzer_level == BUZZER_ALERT_2S_5X) {
+                    // Level 2: Lặp mỗi 6 chu kỳ sensor (~60 giây)
+                    if (buzzer_cycle_count % 6 == 0) {
+                        ESP_LOGW(TAG, "[BUZZER] ALERT REPEAT - Iteration %lu", buzzer_cycle_count / 6);
+                        buzzer_play_pattern(BUZZER_ALERT_2S_5X);
+                    }
                 }
-            } else {
-                // Reset flag khi nhiệt độ trở lại bình thường
-                if (alert_temp_critical) {
-                    ESP_LOGI(TAG, "[ALERT] Temp back to safe - resetting critical flag");
-                    alert_temp_critical = false;
-                }
+                // Level 1 (WARN_5S): Chỉ kêu 1 lần, không lặp lại
             }
-            
-            // Priority 2: Poor air quality (>= 3)
-            if (latest_air_level >= 3 && !needs_alert) {
-                if (!alert_air_poor) {
-                    // Chuyển trạng thái: OK → POOR AIR
-                    ESP_LOGW(TAG, "[ALERT] POOR AIR QUALITY (level %d) - FIRST TIME!", latest_air_level);
-                    ESP_LOGW(TAG, "[BUZZER] 2 warning beeps");
-                    
-                    for (int i = 0; i < 2; i++) {
-                        buzzer_on();
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                        buzzer_off();
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                    }
-                    
-                    alert_air_poor = true;
-                    needs_alert = true;
-                } else {
-                    ESP_LOGW(TAG, "[ALERT] Still poor air (level %d) - no buzzer", latest_air_level);
-                }
-            } else {
-                // Reset flag khi chất lượng không khí cải thiện
-                if (alert_air_poor && latest_air_level < 3) {
-                    ESP_LOGI(TAG, "[ALERT] Air quality improved - resetting poor air flag");
-                    alert_air_poor = false;
-                }
-            }
-            
-            // Priority 3: High temperature (> 30°C) - LED breathing effect only
-            if (latest_temp > 30.0f && latest_temp <= 35.0f && !needs_alert) {
-                if (!alert_temp_high) {
-                    ESP_LOGW(TAG, "[ALERT] HIGH TEMP (%.2f°C) - LED breathing + 1 beep", latest_temp);
-                    
-                    // Breathing red effect
-                    for (int step = 0; step <= 1023; step += 32) {
-                        led_set_rgb(step, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(1000 / 32));
-                    }
-                    for (int step = 1023; step >= 0; step -= 32) {
-                        led_set_rgb(step, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(1000 / 32));
-                    }
-                    
-                    // Single beep
-                    buzzer_on();
-                    vTaskDelay(pdMS_TO_TICKS(150));
-                    buzzer_off();
-                    
-                    alert_temp_high = true;
-                } else {
-                    ESP_LOGW(TAG, "[ALERT] Still high temp (%.2f°C) - no buzzer", latest_temp);
-                }
-            } else {
-                if (alert_temp_high && latest_temp <= 30.0f) {
-                    ESP_LOGI(TAG, "[ALERT] Temp normalized - resetting high temp flag");
-                    alert_temp_high = false;
-                }
-            }
-            
-            // Đảm bảo buzzer tắt sau mỗi chu kỳ
-            vTaskDelay(pdMS_TO_TICKS(100));
-            buzzer_off();
             
             ESP_LOGI(TAG, "===== Actuator Control End =====");
         }
@@ -368,21 +417,38 @@ void app_main(void)
     buzzer_init();
     sht31_init();
     mq135_init();
+    lcd_init();
 
     // MQ135 Calibration
     ESP_LOGI(TAG, "Waiting 30 seconds for MQ135 warmup...");
-    vTaskDelay(pdMS_TO_TICKS(30000));
+    
+    for (int i = 30; i > 0; i--) {
+        // Display warmup countdown on LCD
+        // Note: lcd_set_cursor and lcd_print are static functions in lcd1602.c
+        // Use lcd_display_all or lcd_display instead
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
     
     if (!mq135_has_calibration()) {
         ESP_LOGI(TAG, "Starting MQ135 calibration...");
+        lcd_clear();
+        // Note: Removed lcd_set_cursor and lcd_print calls as they are static functions
+        // LCD will show init message from lcd_init()
+        
         esp_err_t cal_result = mq135_calibrate();
         if (cal_result == ESP_OK) {
             ESP_LOGI(TAG, "✓ MQ135 calibration successful!");
+            lcd_clear();
+            vTaskDelay(pdMS_TO_TICKS(1500));
         } else {
             ESP_LOGW(TAG, "✗ MQ135 calibration failed");
+            lcd_clear();
+            vTaskDelay(pdMS_TO_TICKS(1500));
         }
     } else {
         ESP_LOGI(TAG, "MQ135 already calibrated");
+        lcd_clear();
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     wifi_init();
@@ -391,6 +457,7 @@ void app_main(void)
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, &sensor_task_handle);
     xTaskCreate(actuator_task, "actuator_task", 3072, NULL, 6, &actuator_task_handle);
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 4, &mqtt_task_handle);
+    xTaskCreate(lcd_task, "lcd_task", 3072, NULL, 3, &lcd_task_handle);
 
     ESP_LOGI(TAG, "System initialized");
 }
