@@ -23,6 +23,19 @@
 
 static const char *TAG = "MAIN";
 
+
+// ---TOPIC MQTT ---
+// ID DYNAMIC for room 
+char device_room_id[32] = "bedroom"; 
+
+// Các biến lưu Topic sau khi đã ghép chuỗi
+char topic_fan[128];
+char topic_led[128];
+char topic_buzzer[128];
+char topic_temp[128];
+char topic_humi[128];
+char topic_co2[128];
+
 // Moving averages
 static moving_average_t ma_temp;
 static moving_average_t ma_humi;
@@ -59,6 +72,19 @@ enum {
     EVT_WIFI_CONNECTED = BIT1,
     EVT_MQTT_CONNECTED = BIT2,
 };
+
+void setup_mqtt_topics(const char* room_id)
+{
+    // home/[ROOM_ID]/actuators/fan
+    snprintf(topic_fan, sizeof(topic_fan), "smarthome/%s/actuators/fan", room_id);
+    snprintf(topic_led, sizeof(topic_led), "smarthome/%s/actuators/led", room_id);
+    snprintf(topic_buzzer, sizeof(topic_buzzer), "smarthome/%s/actuators/buzzer", room_id);
+
+    // home/[ROOM_ID]/sensors/temp
+    snprintf(topic_temp, sizeof(topic_temp), "smarthome/%s/sensors/temp", room_id);
+    snprintf(topic_humi, sizeof(topic_humi), "smarthome/%s/sensors/humi", room_id);
+    snprintf(topic_co2, sizeof(topic_co2), "smarthome/%s/sensors/co2", room_id);
+}
 
 static bool read_sht31_with_retry(sht31_data_t *out)
 {
@@ -296,7 +322,7 @@ static void actuator_task(void *pvParameters)
                 fan_on();
             }
 
-            mqtt_send_data("status/fan", fan_status);
+            mqtt_publish_actuator(topic_fan, (fan_speed > 0) ? "ON" : "OFF", fan_status);
 
             // ========== LED CONTROL ==========
             const char* aq_desc[] = {"Good", "Fair", "Moderate", "Poor", "Very Poor"};
@@ -339,7 +365,8 @@ static void actuator_task(void *pvParameters)
                     led_set_rgb(0, 0, 0);
                     break;
             }
-
+            mqtt_publish_actuator(topic_led, 
+                     (latest_air_level >= 0 && latest_air_level <= 4) ? "ON" : "OFF", latest_air_level);
             // ========== 🔔 4-LEVEL BUZZER SYSTEM ==========
             buzzer_level_t new_level = calculate_buzzer_level();
             
@@ -372,7 +399,8 @@ static void actuator_task(void *pvParameters)
                 }
                 // Level 1 (WARN_5S): Chỉ kêu 1 lần, không lặp lại
             }
-            
+            mqtt_publish_actuator(topic_buzzer, 
+                     (current_buzzer_level != BUZZER_OFF) ? "ON" : "OFF", (int)current_buzzer_level);
             ESP_LOGI(TAG, "===== Actuator Control End =====");
         }
     }
@@ -386,13 +414,13 @@ static void mqtt_task(void *pvParameters)
     while (1) {
         char payload[128];
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"C\"}", latest_temp);
-        mqtt_send_data("sensor/temperature", latest_temp);
+        mqtt_send_data(topic_temp, latest_temp);
 
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"%%\"}", latest_humi);
-        mqtt_send_data("sensor/humidity", latest_humi);
+        mqtt_send_data(topic_humi, latest_humi);
 
         ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
-        mqtt_send_data("sensor/air_quality", (float)latest_air_level);
+        mqtt_send_data(topic_co2, latest_mq_ppm );
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
     }
@@ -418,7 +446,7 @@ void app_main(void)
     sht31_init();
     mq135_init();
     lcd_init();
-
+    setup_mqtt_topics(device_room_id);
     // MQ135 Calibration
     ESP_LOGI(TAG, "Waiting 30 seconds for MQ135 warmup...");
     
