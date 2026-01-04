@@ -12,4 +12,6 @@
 void mqtt_app_start(const char *custom_room_id);
 void mqtt_send_data(const char* topic, float value);
 void mqtt_publish_actuator(const char *topic, const char *state, int level);
+
+bool mqtt_is_auto_mode(void);
 #endif

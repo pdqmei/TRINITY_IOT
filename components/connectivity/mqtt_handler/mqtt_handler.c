@@ -8,10 +8,29 @@
 #include "esp_event.h" 
 #include "stdint.h"
 
+// Import actuator control functions
+#include "fan.h"
+#include "led.h"
+#include "buzzer.h"
 
 static const char *TAG = "MQTT";
 static esp_mqtt_client_handle_t client = NULL;
 static bool is_connected = false;
+
+// ===============================================
+// 🆕 BIẾN TOÀN CỤC: CHẾ ĐỘ AUTO/MANUAL
+// ===============================================
+static bool is_auto_mode = true;  // Giá trị mặc định (sẽ đợi sync từ web)
+static bool auto_mode_initialized = false;  // ✅ FIX VẤN ĐỀ 1
+
+// Room ID (được set từ main.c)
+static char current_room_id[32] = "bedroom";
+
+// Topic subscriptions
+static char topic_fan[128];
+static char topic_led[128];
+static char topic_buzzer[128];
+static char topic_auto[64];
 
 static const char *hivemq_ca_cert = 
 "-----BEGIN CERTIFICATE-----\n"
@@ -46,6 +65,142 @@ static const char *hivemq_ca_cert =
 "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
 "-----END CERTIFICATE-----\n";
 
+// ===============================================
+// 🆕 HÀM SUBSCRIBE/UNSUBSCRIBE ACTUATOR TOPICS
+// ===============================================
+static void subscribe_actuator_topics(void)
+{
+    if (!is_connected || client == NULL) return;
+
+    esp_mqtt_client_subscribe(client, topic_fan, 1);
+    esp_mqtt_client_subscribe(client, topic_led, 1);
+    esp_mqtt_client_subscribe(client, topic_buzzer, 1);
+    
+    ESP_LOGI(TAG, "✅ Subscribed to actuator command topics (MANUAL mode)");
+}
+
+static void unsubscribe_actuator_topics(void)
+{
+    if (!is_connected || client == NULL) return;
+
+    esp_mqtt_client_unsubscribe(client, topic_fan);
+    esp_mqtt_client_unsubscribe(client, topic_led);
+    esp_mqtt_client_unsubscribe(client, topic_buzzer);
+    
+    ESP_LOGI(TAG, "🔕 Unsubscribed from actuator command topics (AUTO mode)");
+}
+
+// ===============================================
+// 🆕 HÀM REPORT TRẠNG THÁI THỰC TẾ (FIX VẤN ĐỀ 2)
+// ===============================================
+static void mqtt_report_actuator_state(const char *device, const char *state, int level, bool success)
+{
+    if (!is_connected || client == NULL) return;
+
+    char topic[128];
+    char payload[128];
+    
+    // Topic: smarthome/{room}/actuators/{device}/reported
+    snprintf(topic, sizeof(topic), "smarthome/%s/actuators/%s/reported", current_room_id, device);
+    
+    // Payload: {"state":"ON", "level":70, "success":true}
+    snprintf(payload, sizeof(payload), 
+             "{\"state\":\"%s\",\"level\":%d,\"success\":%s}", 
+             state, level, success ? "true" : "false");
+
+    esp_mqtt_client_publish(client, topic, payload, 0, 1, 0);
+    ESP_LOGI(TAG, "📡 Reported %s state: %s", device, payload);
+}
+
+// ===============================================
+// 🆕 HÀM XỬ LÝ LỆNH ĐIỀU KHIỂN TỪ WEB
+// ===============================================
+static void handle_actuator_command(const char *topic, const char *payload)
+{
+    // ✅ FIX VẤN ĐỀ 1: Kiểm tra initialized
+    if (!auto_mode_initialized) {
+        ESP_LOGW(TAG, "⚠️ Auto mode not initialized, waiting for smarthome/auto");
+        return;
+    }
+
+    // Parse JSON: {"state":"ON", "level":70}
+    cJSON *root = cJSON_Parse(payload);
+    if (root == NULL) {
+        ESP_LOGE(TAG, "Failed to parse JSON: %s", payload);
+        return;
+    }
+
+    const char *state = NULL;
+    int level = 0;
+    bool success = true;
+
+    cJSON *state_item = cJSON_GetObjectItem(root, "state");
+    if (state_item && cJSON_IsString(state_item)) {
+        state = state_item->valuestring;
+    }
+
+    cJSON *level_item = cJSON_GetObjectItem(root, "level");
+    if (level_item && cJSON_IsNumber(level_item)) {
+        level = level_item->valueint;
+    }
+
+    ESP_LOGI(TAG, "📥 Command: %s → state=%s, level=%d", topic, state ? state : "NULL", level);
+
+    // Xác định thiết bị từ topic
+    const char *device_name = NULL;
+    
+    if (strstr(topic, "/fan") != NULL) {
+        device_name = "fan";
+        
+        if (state && strcmp(state, "ON") == 0) {
+            if (level > 0) {
+                fan_set_speed(level);
+                ESP_LOGI(TAG, "✅ FAN set to %d%%", level);
+            } else {
+                fan_on();
+                ESP_LOGI(TAG, "✅ FAN ON");
+            }
+        } else {
+            fan_off();
+            ESP_LOGI(TAG, "✅ FAN OFF");
+        }
+    }
+    else if (strstr(topic, "/led") != NULL) {
+        device_name = "led";
+        
+        if (state && strcmp(state, "ON") == 0) {
+            // Map level (0-3) to brightness
+            uint16_t brightness = (level * 341); // 0→0, 1→341, 2→682, 3→1023
+            led_set_rgb(brightness, brightness, brightness);
+            ESP_LOGI(TAG, "✅ LED set to level %d (brightness=%d)", level, brightness);
+        } else {
+            led_set_rgb(0, 0, 0);
+            ESP_LOGI(TAG, "✅ LED OFF");
+        }
+    }
+    else if (strstr(topic, "/buzzer") != NULL) {
+        device_name = "buzzer";
+        
+        if (state && strcmp(state, "ON") == 0) {
+            buzzer_on();
+            ESP_LOGI(TAG, "✅ BUZZER ON");
+        } else {
+            buzzer_off();
+            ESP_LOGI(TAG, "✅ BUZZER OFF");
+        }
+    }
+
+    // ✅ FIX VẤN ĐỀ 2: Report trạng thái thực tế phần cứng
+    if (device_name != NULL) {
+        mqtt_report_actuator_state(device_name, state ? state : "OFF", level, success);
+    }
+
+    cJSON_Delete(root);
+}
+
+// ===============================================
+// 🆕 MQTT EVENT HANDLER - ĐẦY ĐỦ CHỨC NĂNG
+// ===============================================
 static void mqtt_event_handler(void *handler_args,
                                esp_event_base_t base,
                                int32_t event_id,
@@ -55,17 +210,90 @@ static void mqtt_event_handler(void *handler_args,
 
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "MQTT connected");
+            ESP_LOGI(TAG, "✅ MQTT connected");
             is_connected = true;
+
+            // Tạo topics
+            snprintf(topic_fan, sizeof(topic_fan), "smarthome/%s/actuators/fan", current_room_id);
+            snprintf(topic_led, sizeof(topic_led), "smarthome/%s/actuators/led", current_room_id);
+            snprintf(topic_buzzer, sizeof(topic_buzzer), "smarthome/%s/actuators/buzzer", current_room_id);
+            snprintf(topic_auto, sizeof(topic_auto), "smarthome/auto");
+
+            // ✅ LUÔN subscribe topic auto mode
+            esp_mqtt_client_subscribe(client, topic_auto, 1);
+            ESP_LOGI(TAG, "📩 Subscribed to: %s", topic_auto);
+
+            // ✅ FIX VẤN ĐỀ 3: Chỉ subscribe actuator nếu MANUAL mode
+            if (!is_auto_mode && auto_mode_initialized) {
+                subscribe_actuator_topics();
+            } else {
+                ESP_LOGI(TAG, "ℹ️ Waiting for auto mode initialization...");
+            }
             break;
 
         case MQTT_EVENT_DISCONNECTED:
-            ESP_LOGW(TAG, "MQTT disconnected");
+            ESP_LOGW(TAG, "❌ MQTT disconnected");
             is_connected = false;
             break;
 
+        case MQTT_EVENT_DATA:
+            ESP_LOGI(TAG, "📩 MQTT RX: %.*s → %.*s", 
+                     event->topic_len, event->topic,
+                     event->data_len, event->data);
+
+            // ✅ XỬ LÝ CHUYỂN ĐỔI AUTO/MANUAL
+            if (strstr(event->topic, "smarthome/auto") != NULL) {
+                cJSON *root = cJSON_Parse(event->data);
+                if (root) {
+                    cJSON *state = cJSON_GetObjectItem(root, "state");
+                    if (state && cJSON_IsString(state)) {
+                        bool new_mode = (strcmp(state->valuestring, "ON") == 0);
+                        
+                        // ✅ FIX VẤN ĐỀ 1: Đánh dấu đã initialized
+                        if (!auto_mode_initialized) {
+                            auto_mode_initialized = true;
+                            ESP_LOGI(TAG, "✅ Auto mode initialized from web");
+                        }
+                        
+                        // ✅ FIX VẤN ĐỀ 3: Subscribe/Unsubscribe theo mode
+                        if (new_mode != is_auto_mode) {
+                            is_auto_mode = new_mode;
+                            
+                            if (is_auto_mode) {
+                                ESP_LOGI(TAG, "🤖 Switched to AUTO mode");
+                                unsubscribe_actuator_topics();
+                            } else {
+                                ESP_LOGI(TAG, "👤 Switched to MANUAL mode");
+                                subscribe_actuator_topics();
+                            }
+                        }
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+            // ✅ CHỈ XỬ LÝ LỆNH ĐIỀU KHIỂN KHI Ở MANUAL MODE
+            else if (!is_auto_mode && strstr(event->topic, "/actuators/") != NULL && 
+                     strstr(event->topic, "/reported") == NULL) {  // Không xử lý topic reported
+                
+                // Copy topic và data vì event->data không kết thúc bằng \0
+                char topic_str[256] = {0};
+                char data_str[512] = {0};
+                
+                int topic_len = (event->topic_len < 255) ? event->topic_len : 255;
+                int data_len = (event->data_len < 511) ? event->data_len : 511;
+                
+                strncpy(topic_str, event->topic, topic_len);
+                strncpy(data_str, event->data, data_len);
+                
+                handle_actuator_command(topic_str, data_str);
+            }
+            else if (is_auto_mode && strstr(event->topic, "/actuators/") != NULL) {
+                ESP_LOGW(TAG, "⚠️ Ignored actuator command (AUTO mode active)");
+            }
+            break;
+
         case MQTT_EVENT_ERROR:
-            ESP_LOGE(TAG, "MQTT error");
+            ESP_LOGE(TAG, "❌ MQTT error");
             break;
 
         default:
@@ -73,7 +301,9 @@ static void mqtt_event_handler(void *handler_args,
     }
 }
 
-// Minimal publish helper used by main
+// ===============================================
+// HÀM PUBLISH SENSOR DATA
+// ===============================================
 void mqtt_send_data(const char* topic, float value)
 {
     if (!is_connected || client == NULL) {
@@ -86,25 +316,47 @@ void mqtt_send_data(const char* topic, float value)
 
     int msg_id = esp_mqtt_client_publish(client, topic, payload, 0, 1, 0);
     if (msg_id >= 0) {
-        ESP_LOGI(TAG, "Published to %s: %s", topic, payload);
+        ESP_LOGI(TAG, "📤 Published sensor: %s → %s", topic, payload);
     } else {
-        ESP_LOGE(TAG, "Failed to publish to %s", topic);
+        ESP_LOGE(TAG, "❌ Failed to publish to %s", topic);
     }
 }
+
+// ===============================================
+// HÀM PUBLISH ACTUATOR STATUS (CHỈ TRONG AUTO MODE)
+// ===============================================
 void mqtt_publish_actuator(const char *topic, const char *state, int level)
 {
     if (!is_connected || client == NULL) return;
 
+    // ✅ FIX VẤN ĐỀ 1: Kiểm tra initialized
+    if (!auto_mode_initialized) {
+        ESP_LOGD(TAG, "⏭️ Skip publishing actuator (not initialized)");
+        return;
+    }
+
+    // ✅ CHỈ PUBLISH KHI Ở AUTO MODE
+    if (!is_auto_mode) {
+        ESP_LOGD(TAG, "⏭️ Skip publishing actuator (MANUAL mode)");
+        return;
+    }
+
     char payload[128];
-    // Tạo JSON: {"state":"ON", "level":70}
     snprintf(payload, sizeof(payload), "{\"state\":\"%s\",\"level\":%d}", state, level);
 
-    esp_mqtt_client_publish(client, topic, payload, 0, 1, 0); // QoS 1, Retain 0
-    ESP_LOGI(TAG, "Sent Actuator [%s]: %s", topic, payload);
+    esp_mqtt_client_publish(client, topic, payload, 0, 1, 0);
+    ESP_LOGI(TAG, "📤 Published actuator: %s → %s", topic, payload);
 }
+
+// ===============================================
+// KHỞI TẠO MQTT
+// ===============================================
 void mqtt_app_start(const char *custom_room_id)
 {
-    // Simple default start - real configuration via menuconfig / sdkconfig
+    if (custom_room_id != NULL) {
+        strncpy(current_room_id, custom_room_id, sizeof(current_room_id) - 1);
+    }
+
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = "mqtts://19059388a61f4c8286066fda62e74315.s1.eu.hivemq.cloud",
         .broker.address.port = 8883,
@@ -115,10 +367,17 @@ void mqtt_app_start(const char *custom_room_id)
     };
     
     client = esp_mqtt_client_init(&mqtt_cfg);
-    
-    
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    
     esp_mqtt_client_start(client);
-    ESP_LOGI(TAG, "MQTT started ");
+    
+    ESP_LOGI(TAG, "🚀 MQTT started for room: %s", current_room_id);
+    ESP_LOGI(TAG, "⏳ Waiting for auto mode initialization from web...");
 }
+
+// ===============================================
+// 🆕 HÀM GETTER CHO AUTO MODE
+// ===============================================
+bool mqtt_is_auto_mode(void)
+{
+    return is_auto_mode && auto_mode_initialized;
+} 

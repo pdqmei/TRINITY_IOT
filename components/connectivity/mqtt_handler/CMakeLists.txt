@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "mqtt_handler.c"
+    SRCS "mqtt_handler.c" 
     INCLUDE_DIRS "."
     REQUIRES
     mqtt
@@ -7,4 +7,7 @@ idf_component_register(
     json
     driver
     freertos
+    led
+    fan
+    buzzer
 )

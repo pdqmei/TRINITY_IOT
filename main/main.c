@@ -290,6 +290,15 @@ static void actuator_task(void *pvParameters)
     while (1) {
         EventBits_t bits = xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
         if (bits & EVT_SENSOR_READY) {
+
+           
+            if (!mqtt_is_auto_mode()) {
+                ESP_LOGI(TAG, "👤 MANUAL mode - Skipping auto control");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+
+            ESP_LOGI(TAG, "🤖 AUTO mode - Running auto control");
             ESP_LOGI(TAG, "===== Actuator Control Start =====");
             ESP_LOGI(TAG, "Sensors: T=%.2f°C, H=%.2f%%, AQ=%d", latest_temp, latest_humi, latest_air_level);
 
