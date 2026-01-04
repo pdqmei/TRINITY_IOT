@@ -157,7 +157,7 @@ static buzzer_level_t calculate_buzzer_level(void)
     }
     
     // Priority 3: HIGH TEMP (28-33°C) OR MODERATE AIR (level 2) → Level 1
-    if (latest_temp > 28.0f || latest_air_level >= 2) {
+    if (latest_temp > 30.0f || latest_air_level >= 2) {
         return BUZZER_WARN_5S;
     }
     
@@ -204,7 +204,6 @@ static void sensor_task(void *pvParameters)
             else if (mq_raw < 1300) level = 2;    // Moderate
             else if (mq_raw < 1800) level = 3;    // Poor
             else level = 4;                       // Very Poor
-s
             
             ma_add(&ma_air, (float)level);
             latest_air_level = (int)ma_get(&ma_air);
@@ -283,22 +282,16 @@ static void actuator_task(void *pvParameters)
                 ESP_LOGI(TAG, "[FAN] OFF (T < 25°C)");
                 fan_off();
             } 
-            else if (latest_temp < 28.0f) {
-                fan_speed = 40;
-                fan_status = 0.4f;
-                ESP_LOGI(TAG, "[FAN] 40%% (25-28°C)");
-                fan_set_speed(fan_speed);
-            } 
-            else if (latest_temp < 31.0f) {
-                fan_speed = 70;
-                fan_status = 0.7f;
-                ESP_LOGI(TAG, "[FAN] 70%% (28-31°C)");
+            else if (latest_temp < 30.0f) {
+                fan_speed = 50;
+                fan_status = 0.5f;
+                ESP_LOGI(TAG, "[FAN] 50%% (25-30°C)");
                 fan_set_speed(fan_speed);
             } 
             else {
                 fan_speed = 100;
                 fan_status = 1.0f;
-                ESP_LOGI(TAG, "[FAN] 100%% (>= 31°C)");
+                ESP_LOGI(TAG, "[FAN] 100%% (>= 30°C)");
                 fan_on();
             }
 
@@ -313,12 +306,12 @@ static void actuator_task(void *pvParameters)
                     led_set_rgb(0, 1023, 0);
                     break;
                     
-                case 1: // Yellow
-                    led_set_rgb(1023, 1023, 0);
+                case 1: // Cyan (Blue-Green) - dễ phân biệt hơn Yellow
+                    led_set_rgb(0, 1023, 1023);
                     break;
                     
-                case 2: // Orange
-                    led_set_rgb(1023, 662, 0);
+                case 2: // Yellow
+                    led_set_rgb(1023, 1023, 0);
                     break;
                     
                 case 3: // Red blink
