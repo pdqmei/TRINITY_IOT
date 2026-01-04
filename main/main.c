@@ -197,20 +197,14 @@ static void sensor_task(void *pvParameters)
         } else {
             float ppm = mq135_read_ppm();
             
+            // AQ level dựa trên ADC raw (ổn định hơn ppm)
             int level;
-            if (ppm >= 0.0f) {
-                if (ppm < 400) level = 0;
-                else if (ppm < 600) level = 1;
-                else if (ppm < 800) level = 2;
-                else if (ppm < 1000) level = 3;
-                else level = 4;
-            } else {
-                if (mq_raw <= 819) level = 0;
-                else if (mq_raw <= 1638) level = 1;
-                else if (mq_raw <= 2457) level = 2;
-                else if (mq_raw <= 3276) level = 3;
-                else level = 4;
-            }
+            if (mq_raw < 600) level = 0;          // Clean
+            else if (mq_raw < 900) level = 1;     // Fair
+            else if (mq_raw < 1300) level = 2;    // Moderate
+            else if (mq_raw < 1800) level = 3;    // Poor
+            else level = 4;                       // Very Poor
+s
             
             ma_add(&ma_air, (float)level);
             latest_air_level = (int)ma_get(&ma_air);
