@@ -20,8 +20,12 @@
 #include "mq135.h"
 #include "moving_average.h"
 #include "lcd1602.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "MAIN";
+
+// GPIO for MQTT status LED (Red LED through 220Ω resistor)
+#define MQTT_STATUS_LED_GPIO 18
 
 // Moving averages
 static moving_average_t ma_temp;
@@ -40,6 +44,7 @@ static float latest_humi = 0.0f;
 static int latest_air_level = 0;
 static int latest_mq_raw = 0;
 static float latest_mq_ppm = 0.0f;
+static bool sht31_valid = false;  // Trạng thái cảm biến SHT31
 
 // ========== 4-LEVEL BUZZER SYSTEM ==========
 typedef enum {
@@ -177,12 +182,14 @@ static void sensor_task(void *pvParameters)
         bool mq_ok = read_mq135_with_retry(&mq_raw);
 
         if (!sht_ok) {
-            ESP_LOGE(TAG, "SHT31 read failed, using last value");
+            ESP_LOGE(TAG, "SHT31 read failed, sensor disconnected");
+            sht31_valid = false;
         } else {
             ma_add(&ma_temp, sdata.temperature);
             ma_add(&ma_humi, sdata.humidity);
             latest_temp = ma_get(&ma_temp);
             latest_humi = ma_get(&ma_humi);
+            sht31_valid = true;
         }
 
         if (!mq_ok) {
@@ -249,7 +256,7 @@ static void lcd_task(void *pvParameters)
             );
         }
         
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(2000));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(5000));
     }
 }
 
@@ -257,9 +264,7 @@ static void actuator_task(void *pvParameters)
 {
     (void) pvParameters;
 
-    fan_init();
-    led_init();
-    buzzer_init();
+    // Actuators already initialized in app_main(), no need to init again
 
     while (1) {
         EventBits_t bits = xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -271,7 +276,14 @@ static void actuator_task(void *pvParameters)
             uint8_t fan_speed = 0;
             float fan_status = 0.0f;
 
-            if (latest_temp < 25.0f) {
+            if (!sht31_valid) {
+                // Không có cảm biến SHT31 -> TẮT QUẠT
+                fan_speed = 0;
+                fan_status = 0.0f;
+                ESP_LOGW(TAG, "[FAN] OFF (SHT31 không hoạt động)");
+                fan_off();
+            }
+            else if (latest_temp < 25.0f) {
                 fan_speed = 0;
                 fan_status = 0.0f;
                 ESP_LOGI(TAG, "[FAN] OFF (T < 25°C)");
@@ -384,6 +396,22 @@ static void mqtt_task(void *pvParameters)
     TickType_t last_wake = xTaskGetTickCount();
 
     while (1) {
+        // Update MQTT status LED
+        bool mqtt_connected = mqtt_is_connected();
+        gpio_set_level(MQTT_STATUS_LED_GPIO, mqtt_connected ? 1 : 0);
+        
+        if (mqtt_connected) {
+            if (!(xEventGroupGetBits(sys_event_group) & EVT_MQTT_CONNECTED)) {
+                xEventGroupSetBits(sys_event_group, EVT_MQTT_CONNECTED);
+                ESP_LOGI(TAG, "MQTT connected - Status LED ON");
+            }
+        } else {
+            if (xEventGroupGetBits(sys_event_group) & EVT_MQTT_CONNECTED) {
+                xEventGroupClearBits(sys_event_group, EVT_MQTT_CONNECTED);
+                ESP_LOGW(TAG, "MQTT disconnected - Status LED OFF");
+            }
+        }
+
         char payload[128];
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"C\"}", latest_temp);
         mqtt_send_data("sensor/temperature", latest_temp);
@@ -394,7 +422,7 @@ static void mqtt_task(void *pvParameters)
         ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
         mqtt_send_data("sensor/air_quality", (float)latest_air_level);
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(5000));
     }
 }
 
@@ -419,10 +447,16 @@ void app_main(void)
     mq135_init();
     lcd_init();
 
+    // Initialize MQTT status LED (GPIO 18)
+    gpio_reset_pin(MQTT_STATUS_LED_GPIO);
+    gpio_set_direction(MQTT_STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(MQTT_STATUS_LED_GPIO, 0);  // Initially OFF
+    ESP_LOGI(TAG, "MQTT status LED initialized on GPIO %d", MQTT_STATUS_LED_GPIO);
+
     // MQ135 Calibration
-    ESP_LOGI(TAG, "Waiting 30 seconds for MQ135 warmup...");
+    ESP_LOGI(TAG, "Waiting 10 seconds for MQ135 warmup...");
     
-    for (int i = 30; i > 0; i--) {
+    for (int i = 10; i > 0; i--) {
         // Display warmup countdown on LCD
         // Note: lcd_set_cursor and lcd_print are static functions in lcd1602.c
         // Use lcd_display_all or lcd_display instead
