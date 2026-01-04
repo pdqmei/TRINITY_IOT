@@ -3,7 +3,7 @@
 #define APP_CONFIG_H
 
 // Pin mappings
-#define PIN_FAN        16
+#define PIN_FAN        23
 #define PIN_LED_RED    25
 #define PIN_LED_GREEN  26
 #define PIN_LED_BLUE   27
