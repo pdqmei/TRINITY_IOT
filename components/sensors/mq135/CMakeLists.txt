@@ -4,4 +4,6 @@ idf_component_register(
     REQUIRES
     driver
     esp_adc
+    PRIV_REQUIRES
+    nvs_flash
 )

@@ -146,18 +146,18 @@ static void buzzer_play_pattern(buzzer_level_t level)
 
 static buzzer_level_t calculate_buzzer_level(void)
 {
-    // Priority 1: CRITICAL TEMPERATURE (> 35°C) → Level 3
-    if (latest_temp > 35.0f) {
+    // Priority 1: CRITICAL TEMPERATURE (> 33°C) → Level 3
+    if (latest_temp > 33.0f) {
         return BUZZER_CRITICAL_1S_10X;
     }
     
-    // Priority 2: VERY POOR AIR (level 4) → Level 2
-    if (latest_air_level >= 4) {
+    // Priority 2: VERY POOR AIR (level 3-4) → Level 2
+    if (latest_air_level >= 3) {
         return BUZZER_ALERT_2S_5X;
     }
     
-    // Priority 3: HIGH TEMP (30-35°C) OR POOR AIR (level 3) → Level 1
-    if (latest_temp > 30.0f || latest_air_level >= 3) {
+    // Priority 3: HIGH TEMP (28-33°C) OR MODERATE AIR (level 2) → Level 1
+    if (latest_temp > 28.0f || latest_air_level >= 2) {
         return BUZZER_WARN_5S;
     }
     
