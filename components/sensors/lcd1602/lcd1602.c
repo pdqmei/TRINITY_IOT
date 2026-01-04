@@ -24,9 +24,11 @@ static const char *TAG = "LCD";
 
 // I2C configuration for LCD (shares I2C bus with SHT31)
 #define I2C_MASTER_NUM     I2C_NUM_0
-#define I2C_MASTER_FREQ_HZ 400000
 #define I2C_MASTER_SDA_IO  PIN_SHT31_SDA
 #define I2C_MASTER_SCL_IO  PIN_SHT31_SCL
+
+// Note: I2C bus initialized by sht31_init() at 100kHz
+// LCD shares the same I2C bus with SHT31 (0x44) and uses PCF8574 (0x27)
 
 static uint8_t lcd_address = 0x27;
 static bool lcd_initialized = false;

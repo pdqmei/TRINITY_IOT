@@ -16,16 +16,32 @@ static const uint8_t SHT31_CMD_MEAS_HIGHREP[2] = { 0x2C, 0x06 };
 static const char *TAG = "SHT31";
 
 void sht31_init(void) {
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = I2C_MASTER_SDA_IO,
-        .scl_io_num = I2C_MASTER_SCL_IO,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 100000,
-    };
-    i2c_param_config(I2C_MASTER_NUM, &conf);
-    i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
+    // Check if I2C driver already installed
+    esp_err_t ret = i2c_driver_install(I2C_MASTER_NUM, I2C_MODE_MASTER, 0, 0, 0);
+    
+    if (ret == ESP_ERR_INVALID_STATE) {
+        // I2C already initialized (probably by another component)
+        ESP_LOGI(TAG, "I2C bus already initialized, skipping driver install");
+    } else if (ret == ESP_OK) {
+        // First time initialization
+        ESP_LOGI(TAG, "Initializing I2C bus (SDA=%d, SCL=%d, 100kHz)", 
+                 I2C_MASTER_SDA_IO, I2C_MASTER_SCL_IO);
+        
+        i2c_config_t conf = {
+            .mode = I2C_MODE_MASTER,
+            .sda_io_num = I2C_MASTER_SDA_IO,
+            .scl_io_num = I2C_MASTER_SCL_IO,
+            .sda_pullup_en = GPIO_PULLUP_ENABLE,
+            .scl_pullup_en = GPIO_PULLUP_ENABLE,
+            .master.clk_speed = 100000,  // 100kHz for compatibility with LCD
+        };
+        i2c_param_config(I2C_MASTER_NUM, &conf);
+        
+        // Note: driver already installed above, just configure parameters
+        ESP_LOGI(TAG, "I2C bus initialized successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize I2C: %d", ret);
+    }
 }
 
 sht31_data_t sht31_read(void) {
