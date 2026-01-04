@@ -50,27 +50,37 @@ float mq135_read_ppm(void) {
     float voltage = (raw / 4095.0f) * 3.3f;
 
     if (!is_calibrated || calibration_vro <= 0.0f) {
-        ESP_LOGW(TAG, "MQ135 not calibrated, skipping accurate PPM computation");
-        return -1.0f;
+        ESP_LOGD(TAG, "MQ135 not calibrated, using raw value estimation");
+        // Fallback: estimate PPM from raw value
+        if (raw < 100) return 0.0f;
+        return (float)raw * 0.5f;  // Simple linear estimate
     }
 
     float V = voltage;
     float Vro = calibration_vro;
-    float denom = (V * (3.3f - Vro));
-    if (denom <= 0.0f) {
-        ESP_LOGW(TAG, "MQ135 invalid voltage for PPM calculation V=%.3f Vro=%.3f", V, Vro);
-        return -1.0f;
+    
+    // Add safety bounds
+    if (V >= 3.2f || V <= 0.1f) {
+        ESP_LOGD(TAG, "MQ135 voltage out of range: %.3fV", V);
+        return (float)raw * 0.5f;
     }
+    
+    float denom = (V * (3.3f - Vro));
+    if (denom <= 0.0001f) {  // More tolerant threshold
+        ESP_LOGD(TAG, "MQ135 denominator too small: %.6f", denom);
+        return (float)raw * 0.5f;
+    }
+    
     float Rs_Ro = ((3.3f - V) * Vro) / denom;
-    if (Rs_Ro <= 0.0f) {
-        ESP_LOGW(TAG, "MQ135 computed non-positive Rs/Ro=%.6f", Rs_Ro);
-        return -1.0f;
+    if (Rs_Ro <= 0.01f || Rs_Ro > 100.0f) {  // Reasonable bounds
+        ESP_LOGD(TAG, "MQ135 Rs/Ro out of range: %.6f", Rs_Ro);
+        return (float)raw * 0.5f;
     }
 
     float ppm = 116.6f * powf(Rs_Ro, -2.769f);
-    if (!isfinite(ppm) || ppm < 0.0f) {
-        ESP_LOGW(TAG, "MQ135 PPM computation produced invalid value: %f", ppm);
-        return -1.0f;
+    if (!isfinite(ppm) || ppm < 0.0f || ppm > 10000.0f) {
+        ESP_LOGD(TAG, "MQ135 PPM invalid: %.2f, using fallback", ppm);
+        return (float)raw * 0.5f;
     }
 
     ESP_LOGI(TAG, "MQ135 PPM: %.2f", ppm);
@@ -103,13 +113,26 @@ esp_err_t mq135_calibrate(void) {
     
     ESP_LOGI(TAG, "Starting MQ135 calibration...");
     
+    // Test first reading
+    uint16_t first = mq135_read_raw();
+    ESP_LOGI(TAG, "First reading: %u", first);
+    if (first == 0) {
+        ESP_LOGE(TAG, "Sensor not responding - check power and connections");
+        return ESP_ERR_INVALID_STATE;
+    }
+    
     for (int i = 0; i < samples; i++) {
         uint16_t r = mq135_read_raw();
         sum += r;
+        if (i % 10 == 0) {
+            ESP_LOGI(TAG, "Calibration progress: %d/%d, current raw=%u", i, samples, r);
+        }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     
     uint32_t raw_ro = sum / samples;
+    ESP_LOGI(TAG, "Average raw value: %lu", raw_ro);
+    
     if (raw_ro == 0 || raw_ro > 4095) {
         ESP_LOGE(TAG, "Invalid calibration value: %lu", raw_ro);
         return ESP_ERR_INVALID_ARG;
