@@ -27,6 +27,18 @@ static const char *TAG = "MAIN";
 // GPIO for MQTT status LED (Red LED through 220Ω resistor)
 #define MQTT_STATUS_LED_GPIO 18
 
+// ---TOPIC MQTT ---
+// ID DYNAMIC for room 
+char device_room_id[32] = "livingroom"; 
+
+// Các biến lưu Topic sau khi đã ghép chuỗi
+char topic_fan[128];
+char topic_led[128];
+char topic_buzzer[128];
+char topic_temp[128];
+char topic_humi[128];
+char topic_co2[128];
+
 // Moving averages
 static moving_average_t ma_temp;
 static moving_average_t ma_humi;
@@ -55,7 +67,8 @@ typedef enum {
 } buzzer_level_t;
 
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
-static uint32_t buzzer_cycle_count = 0;
+static TaskHandle_t buzzer_task_handle = NULL;
+static volatile int buzzer_pattern_level = 0;  // Shared with buzzer task
 
 // Fan control with hysteresis
 static uint8_t current_fan_speed = 0;
@@ -67,6 +80,19 @@ enum {
     EVT_WIFI_CONNECTED = BIT1,
     EVT_MQTT_CONNECTED = BIT2,
 };
+
+void setup_mqtt_topics(const char* room_id)
+{
+    // home/[ROOM_ID]/actuators/fan
+    snprintf(topic_fan, sizeof(topic_fan), "smarthome/%s/actuators/fan", room_id);
+    snprintf(topic_led, sizeof(topic_led), "smarthome/%s/actuators/led", room_id);
+    snprintf(topic_buzzer, sizeof(topic_buzzer), "smarthome/%s/actuators/buzzer", room_id);
+
+    // home/[ROOM_ID]/sensors/temp
+    snprintf(topic_temp, sizeof(topic_temp), "smarthome/%s/sensors/temp", room_id);
+    snprintf(topic_humi, sizeof(topic_humi), "smarthome/%s/sensors/humi", room_id);
+    snprintf(topic_co2, sizeof(topic_co2), "smarthome/%s/sensors/co2", room_id);
+}
 
 static bool read_sht31_with_retry(sht31_data_t *out)
 {
@@ -94,57 +120,87 @@ static bool read_mq135_with_retry(int *out_raw)
     return false;
 }
 
-// ========== BUZZER PATTERN FUNCTIONS ==========
-static void buzzer_play_pattern(buzzer_level_t level)
+// ========== BUZZER PATTERN TASK (LOOPING CONTINUOUSLY) ==========
+static void buzzer_pattern_task(void *pvParameters)
 {
-    switch (level) {
-        case BUZZER_OFF:
-            buzzer_off();
-            ESP_LOGI(TAG, "[BUZZER] Level 0: OFF");
-            break;
-            
-        case BUZZER_WARN_5S:
-            // Level 1: Kêu liên tục 5 giây
-            ESP_LOGW(TAG, "[BUZZER] Level 1: WARNING - 5 seconds continuous beep");
-            buzzer_on();
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            buzzer_off();
-            break;
-            
-        case BUZZER_ALERT_2S_5X:
-            // Level 2: Kêu 2s, tắt 0.5s, lặp 5 lần
-            ESP_LOGW(TAG, "[BUZZER] Level 2: ALERT - 2s beep x 5 cycles");
-            for (int i = 0; i < 5; i++) {
-                ESP_LOGW(TAG, "  Alert cycle %d/5", i+1);
+    int level = buzzer_pattern_level;
+    ESP_LOGI(TAG, "[BUZZER] Task started - Level %d (looping)", level);
+    
+    while (1) {
+        if (buzzer_pattern_level == 0) break;
+        
+        switch (level) {
+            case 1:  // Level 1: Kêu 5s, nghỉ 2s, lặp lại
                 buzzer_on();
-                vTaskDelay(pdMS_TO_TICKS(2000));
+                for (int i = 0; i < 50 && buzzer_pattern_level == level; i++)
+                    vTaskDelay(pdMS_TO_TICKS(100));
                 buzzer_off();
-                if (i < 4) {
-                    vTaskDelay(pdMS_TO_TICKS(500));
+                for (int i = 0; i < 20 && buzzer_pattern_level == level; i++)
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+                
+            case 2:  // Level 2: Kêu 2s, tắt 0.5s x5, nghỉ 2s, lặp lại
+                for (int cycle = 0; cycle < 5 && buzzer_pattern_level == level; cycle++) {
+                    buzzer_on();
+                    for (int i = 0; i < 20 && buzzer_pattern_level == level; i++)
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    buzzer_off();
+                    for (int i = 0; i < 5 && buzzer_pattern_level == level; i++)
+                        vTaskDelay(pdMS_TO_TICKS(100));
                 }
-            }
-            break;
-            
-        case BUZZER_CRITICAL_1S_10X:
-            // Level 3: Kêu 1s, tắt 0.3s, lặp 10 lần
-            ESP_LOGE(TAG, "[BUZZER] Level 3: CRITICAL - 1s beep x 10 cycles CONTINUOUS!");
-            for (int i = 0; i < 10; i++) {
-                ESP_LOGE(TAG, "  CRITICAL cycle %d/10", i+1);
-                buzzer_on();
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                buzzer_off();
-                if (i < 9) {
-                    vTaskDelay(pdMS_TO_TICKS(300));
+                for (int i = 0; i < 20 && buzzer_pattern_level == level; i++)
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+                
+            case 3:  // Level 3: Kêu 1s, tắt 0.3s x10, nghỉ 1s, lặp lại
+            default:
+                for (int cycle = 0; cycle < 10 && buzzer_pattern_level == level; cycle++) {
+                    buzzer_on();
+                    for (int i = 0; i < 10 && buzzer_pattern_level == level; i++)
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    buzzer_off();
+                    for (int i = 0; i < 3 && buzzer_pattern_level == level; i++)
+                        vTaskDelay(pdMS_TO_TICKS(100));
                 }
-            }
-            break;
-            
-        default:
-            buzzer_off();
-            break;
+                for (int i = 0; i < 10 && buzzer_pattern_level == level; i++)
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+        }
+        
+        if (buzzer_pattern_level != level) {
+            level = buzzer_pattern_level;
+            if (level == 0) break;
+            ESP_LOGI(TAG, "[BUZZER] Level changed to %d", level);
+        }
     }
     
-    buzzer_off();  // Đảm bảo tắt
+    buzzer_off();
+    ESP_LOGI(TAG, "[BUZZER] Task stopped");
+    buzzer_task_handle = NULL;
+    vTaskDelete(NULL);
+}
+
+// Khởi chạy/dừng buzzer pattern
+static void buzzer_start_pattern(int level)
+{
+    if (level == buzzer_pattern_level && buzzer_task_handle != NULL) {
+        return;  // Đang chạy đúng level
+    }
+    
+    buzzer_pattern_level = level;
+    
+    if (level <= 0) {
+        buzzer_off();
+        ESP_LOGI(TAG, "[BUZZER] Level 0: OFF");
+        return;
+    }
+    
+    if (buzzer_task_handle == NULL) {
+        xTaskCreate(buzzer_pattern_task, "buzzer_auto", 2048, NULL, 5, &buzzer_task_handle);
+        ESP_LOGW(TAG, "[BUZZER] Started level %d (continuous)", level);
+    } else {
+        ESP_LOGW(TAG, "[BUZZER] Changed to level %d", level);
+    }
 }
 
 static buzzer_level_t calculate_buzzer_level(void)
@@ -265,6 +321,14 @@ static void actuator_task(void *pvParameters)
     while (1) {
         EventBits_t bits = xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
         if (bits & EVT_SENSOR_READY) {
+
+            if (!mqtt_is_auto_mode()) {
+                ESP_LOGI(TAG, "👤 MANUAL mode - Skipping auto control");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+
+            ESP_LOGI(TAG, "🤖 AUTO mode - Running auto control");
             ESP_LOGI(TAG, "===== Actuator Control Start =====");
             ESP_LOGI(TAG, "Sensors: T=%.2f°C, H=%.2f%%, AQ=%d", latest_temp, latest_humi, latest_air_level);
 
@@ -339,7 +403,7 @@ static void actuator_task(void *pvParameters)
             }
             
             current_fan_speed = fan_speed;  // Lưu trạng thái
-            mqtt_send_data("status/fan", fan_status);
+            mqtt_publish_actuator(topic_fan, (fan_speed > 0) ? "ON" : "OFF", (int)fan_status);
 
             // ========== LED CONTROL ==========
             const char* aq_desc[] = {"Good", "Fair", "Moderate", "Poor", "Very Poor"};
@@ -382,39 +446,20 @@ static void actuator_task(void *pvParameters)
                     led_set_rgb(0, 0, 0);
                     break;
             }
+            mqtt_publish_actuator(topic_led, 
+                     (latest_air_level >= 0 && latest_air_level <= 4) ? "ON" : "OFF", latest_air_level);
 
-            // ========== 🔔 4-LEVEL BUZZER SYSTEM ==========
+            // ========== 🔔 4-LEVEL BUZZER SYSTEM (CONTINUOUS) ==========
             buzzer_level_t new_level = calculate_buzzer_level();
             
-            // Chỉ kêu khi CHUYỂN LEVEL hoặc lặp lại theo chu kỳ
             if (new_level != current_buzzer_level) {
-                // Level thay đổi → kêu ngay
                 ESP_LOGI(TAG, "[BUZZER] Level changed: %d → %d", current_buzzer_level, new_level);
                 current_buzzer_level = new_level;
-                buzzer_cycle_count = 0;
-                
-                buzzer_play_pattern(current_buzzer_level);
-            } 
-            else if (current_buzzer_level != BUZZER_OFF) {
-                // Level không đổi nhưng vẫn đang alert → xét lặp lại
-                buzzer_cycle_count++;
-                
-                if (current_buzzer_level == BUZZER_CRITICAL_1S_10X) {
-                    // Level 3: Lặp mỗi 3 chu kỳ sensor (~30 giây)
-                    if (buzzer_cycle_count % 3 == 0) {
-                        ESP_LOGE(TAG, "[BUZZER] CRITICAL REPEAT - Iteration %lu", buzzer_cycle_count / 3);
-                        buzzer_play_pattern(BUZZER_CRITICAL_1S_10X);
-                    }
-                } 
-                else if (current_buzzer_level == BUZZER_ALERT_2S_5X) {
-                    // Level 2: Lặp mỗi 6 chu kỳ sensor (~60 giây)
-                    if (buzzer_cycle_count % 6 == 0) {
-                        ESP_LOGW(TAG, "[BUZZER] ALERT REPEAT - Iteration %lu", buzzer_cycle_count / 6);
-                        buzzer_play_pattern(BUZZER_ALERT_2S_5X);
-                    }
-                }
-                // Level 1 (WARN_5S): Chỉ kêu 1 lần, không lặp lại
+                buzzer_start_pattern((int)new_level);  // Task tự lặp liên tục
             }
+            
+            mqtt_publish_actuator(topic_buzzer, 
+                     (current_buzzer_level != BUZZER_OFF) ? "ON" : "OFF", (int)current_buzzer_level);
             
             ESP_LOGI(TAG, "===== Actuator Control End =====");
         }
@@ -430,28 +475,16 @@ static void mqtt_task(void *pvParameters)
         // Update MQTT status LED
         bool mqtt_connected = mqtt_is_connected();
         gpio_set_level(MQTT_STATUS_LED_GPIO, mqtt_connected ? 1 : 0);
-        
-        if (mqtt_connected) {
-            if (!(xEventGroupGetBits(sys_event_group) & EVT_MQTT_CONNECTED)) {
-                xEventGroupSetBits(sys_event_group, EVT_MQTT_CONNECTED);
-                ESP_LOGI(TAG, "MQTT connected - Status LED ON");
-            }
-        } else {
-            if (xEventGroupGetBits(sys_event_group) & EVT_MQTT_CONNECTED) {
-                xEventGroupClearBits(sys_event_group, EVT_MQTT_CONNECTED);
-                ESP_LOGW(TAG, "MQTT disconnected - Status LED OFF");
-            }
-        }
 
         char payload[128];
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"C\"}", latest_temp);
-        mqtt_send_data("sensor/temperature", latest_temp);
+        mqtt_send_data(topic_temp, latest_temp);
 
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"%%\"}", latest_humi);
-        mqtt_send_data("sensor/humidity", latest_humi);
+        mqtt_send_data(topic_humi, latest_humi);
 
         ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
-        mqtt_send_data("sensor/air_quality", (float)latest_air_level);
+        mqtt_send_data(topic_co2, latest_mq_ppm);
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(5000));
     }
@@ -483,6 +516,9 @@ void app_main(void)
     gpio_set_direction(MQTT_STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(MQTT_STATUS_LED_GPIO, 0);  // Initially OFF
     ESP_LOGI(TAG, "MQTT status LED initialized on GPIO %d", MQTT_STATUS_LED_GPIO);
+
+    // Setup MQTT topics
+    setup_mqtt_topics(device_room_id);
 
     // MQ135 Calibration
     ESP_LOGI(TAG, "Waiting 10 seconds for MQ135 warmup...");
@@ -517,7 +553,23 @@ void app_main(void)
     }
 
     wifi_init();
-    mqtt_app_start(NULL);
+    
+    // ĐỢI WiFi kết nối trước khi khởi động MQTT
+    ESP_LOGI(TAG, "Waiting for WiFi connection...");
+    int wifi_timeout = 0;
+    while (!wifi_is_connected() && wifi_timeout < 30) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        wifi_timeout++;
+        ESP_LOGI(TAG, "WiFi connecting... %d/30s", wifi_timeout);
+    }
+    
+    if (wifi_is_connected()) {
+        ESP_LOGI(TAG, "✓ WiFi connected! Starting MQTT...");
+        mqtt_app_start(NULL);
+    } else {
+        ESP_LOGE(TAG, "✗ WiFi connection timeout! MQTT will retry later...");
+        mqtt_app_start(NULL);  // MQTT sẽ tự retry khi có WiFi
+    }
 
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, &sensor_task_handle);
     xTaskCreate(actuator_task, "actuator_task", 3072, NULL, 6, &actuator_task_handle);

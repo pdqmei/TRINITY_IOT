@@ -7,4 +7,8 @@ idf_component_register(
     json
     driver
     freertos
+    PRIV_REQUIRES
+    fan
+    led
+    buzzer
 )
