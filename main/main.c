@@ -57,6 +57,9 @@ typedef enum {
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
 static uint32_t buzzer_cycle_count = 0;
 
+// Fan control with hysteresis
+static uint8_t current_fan_speed = 0;
+
 // Event group
 static EventGroupHandle_t sys_event_group;
 enum {
@@ -146,18 +149,18 @@ static void buzzer_play_pattern(buzzer_level_t level)
 
 static buzzer_level_t calculate_buzzer_level(void)
 {
-    // Priority 1: CRITICAL TEMPERATURE (> 33°C) → Level 3
-    if (latest_temp > 33.0f) {
+    // Priority 1: CRITICAL HUMIDITY (> 80%) → Level 3
+    if (latest_humi > 80.0f) {
         return BUZZER_CRITICAL_1S_10X;
     }
     
-    // Priority 2: VERY POOR AIR (level 3-4) → Level 2
+    // Priority 2: VERY POOR AIR QUALITY (level 4) → Level 2
     if (latest_air_level >= 3) {
         return BUZZER_ALERT_2S_5X;
     }
     
-    // Priority 3: HIGH TEMP (28-33°C) OR MODERATE AIR (level 2) → Level 1
-    if (latest_temp > 30.0f || latest_air_level >= 2) {
+    // Priority 3: HIGH HUMIDITY (> 70%) → Level 1
+    if (latest_humi > 70.0f) {
         return BUZZER_WARN_5S;
     }
     
@@ -265,7 +268,7 @@ static void actuator_task(void *pvParameters)
             ESP_LOGI(TAG, "===== Actuator Control Start =====");
             ESP_LOGI(TAG, "Sensors: T=%.2f°C, H=%.2f%%, AQ=%d", latest_temp, latest_humi, latest_air_level);
 
-            // ========== FAN CONTROL ==========
+            // ========== FAN CONTROL WITH HYSTERESIS ==========
             uint8_t fan_speed = 0;
             float fan_status = 0.0f;
 
@@ -273,28 +276,69 @@ static void actuator_task(void *pvParameters)
                 // Không có cảm biến SHT31 -> TẮT QUẠT
                 fan_speed = 0;
                 fan_status = 0.0f;
-                ESP_LOGW(TAG, "[FAN] OFF (SHT31 không hoạt động)");
-                fan_off();
+                if (current_fan_speed != 0) {
+                    ESP_LOGW(TAG, "[FAN] OFF (SHT31 không hoạt động)");
+                    fan_off();
+                }
             }
-            else if (latest_temp < 25.0f) {
-                fan_speed = 0;
-                fan_status = 0.0f;
-                ESP_LOGI(TAG, "[FAN] OFF (T < 25°C)");
-                fan_off();
-            } 
-            else if (latest_temp < 30.0f) {
-                fan_speed = 50;
-                fan_status = 0.5f;
-                ESP_LOGI(TAG, "[FAN] 50%% (25-30°C)");
-                fan_set_speed(fan_speed);
-            } 
             else {
-                fan_speed = 100;
-                fan_status = 1.0f;
-                ESP_LOGI(TAG, "[FAN] 100%% (>= 30°C)");
-                fan_on();
+                // Hysteresis: Tránh bật/tắt liên tục khi nhiệt độ dao động
+                // OFF zone: T < 24°C (hysteresis thấp hơn 25°C)
+                // 50% zone: 25°C ≤ T < 29°C (hysteresis thấp hơn 30°C)
+                // 100% zone: T ≥ 30°C
+                
+                if (current_fan_speed == 0) {
+                    // Quạt đang TẮT → Bật khi T ≥ 25°C
+                    if (latest_temp >= 25.0f) {
+                        fan_speed = 50;
+                        fan_status = 0.5f;
+                        ESP_LOGI(TAG, "[FAN] 50%% (T=%.1f°C reached 25°C)", latest_temp);
+                        fan_set_speed(fan_speed);
+                    } else {
+                        fan_speed = 0;
+                        fan_status = 0.0f;
+                    }
+                }
+                else if (current_fan_speed == 50) {
+                    // Quạt đang 50% → Kiểm tra hysteresis
+                    if (latest_temp >= 30.0f) {
+                        // Tăng lên 100%
+                        fan_speed = 100;
+                        fan_status = 1.0f;
+                        ESP_LOGI(TAG, "[FAN] 100%% (T=%.1f°C reached 30°C)", latest_temp);
+                        fan_on();
+                    } 
+                    else if (latest_temp < 24.0f) {
+                        // Giảm xuống OFF (hysteresis -1°C)
+                        fan_speed = 0;
+                        fan_status = 0.0f;
+                        ESP_LOGI(TAG, "[FAN] OFF (T=%.1f°C dropped below 24°C)", latest_temp);
+                        fan_off();
+                    } 
+                    else {
+                        // Giữ nguyên 50%
+                        fan_speed = 50;
+                        fan_status = 0.5f;
+                    }
+                }
+                else if (current_fan_speed == 100) {
+                    // Quạt đang 100% → Kiểm tra hysteresis
+                    if (latest_temp < 29.0f) {
+                        // Giảm xuống 50% (hysteresis -1°C)
+                        fan_speed = 50;
+                        fan_status = 0.5f;
+                        ESP_LOGI(TAG, "[FAN] 50%% (T=%.1f°C dropped below 29°C)", latest_temp);
+                        fan_set_speed(fan_speed);
+                    } 
+                    else {
+                        // Giữ nguyên 100%
+                        fan_speed = 100;
+                        fan_status = 1.0f;
+                    }
+                }
             }
-
+            
+            current_fan_speed = fan_speed;  // Lưu trạng thái
             mqtt_send_data("status/fan", fan_status);
 
             // ========== LED CONTROL ==========

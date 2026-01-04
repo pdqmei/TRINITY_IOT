@@ -24,7 +24,7 @@
 #define FAN_PIN             PIN_FAN
 
 // Set to 1 if IRF520 module has inverted logic (HIGH=OFF, LOW=ON)
-#define FAN_INVERT_OUTPUT   0
+#define FAN_INVERT_OUTPUT   1
 
 // Discrete duty levels for 10-bit resolution (0-1023)
 static const uint32_t fan_duties[4] = {0, 341, 682, 1023};
