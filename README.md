@@ -21,7 +21,7 @@ Hệ thống giám sát môi trường thông minh sử dụng ESP32 với khả
 - **LCD1602 I2C** - Màn hình hiển thị
 
 ### Actuators
-- **IRF520 MOSFET Module** hoặc **L298N** - Điều khiển quạt DC
+- **L298N Motor Driver** - Điều khiển quạt DC 12V với PWM
 - **Fan DC 12V** - Quạt làm mát (qua boost converter MT3608)
 - **LED RGB Common Cathode** - 4 chân (R/G/B/GND)
 - **Buzzer 5V Active** - Cảnh báo âm thanh
@@ -48,16 +48,23 @@ MQ135 VCC ──→ 5V
 MQ135 GND ──→ GND
 ```
 
-### Fan Control (IRF520 Module)
+### Fan Control (L298N Module)
 ```
-ESP32 GPIO23 (PWM) ──→ IRF520 SIG
-IRF520 VIN ──→ MT3608 OUT+ (12V)
-IRF520 V+ ──→ Fan dây đỏ
-IRF520 V- ──→ Fan dây đen
-IRF520 GND ──→ ESP32 GND (COMMON GND - QUAN TRỌNG!)
+ESP32 GPIO23 (PWM) ──→ L298N ENA
+L298N IN1 ──→ 3.3V (hoặc VCC)
+L298N IN2 ──→ GND
+L298N 12V ──→ MT3608 OUT+ (12V)
+L298N GND ──→ ESP32 GND (COMMON GND - QUAN TRỌNG!)
+L298N OUT1 ──→ Fan dây đỏ (+)
+L298N OUT2 ──→ Fan dây đen (-)
 MT3608 IN+ ──→ 5V
 MT3608 IN- ──→ GND
 ```
+
+**Lưu ý quan trọng:**
+- **IN1 = HIGH (3.3V), IN2 = LOW (GND):** Quạt quay thuận chiều
+- **ENA = PWM:** Điều khiển tốc độ 0-100%
+- **GND chung:** ESP32 GND phải nối chung với L298N GND và MT3608 GND
 
 ### LED RGB
 ```
@@ -168,10 +175,11 @@ sensor/temperature    → {"value": 25.5, "unit": "C"}
 sensor/humidity       → {"value": 60.0, "unit": "%"}
 sensor/air_quality    → {"level": 2, "raw": 1024, "ppm": 450.5}
 status/fan           → {"state": "on", "speed": 50}
-status/led           → {"color": {"r": 255, "g": 255, "b": 0}}
-status/buzzer        → {"level": 1, "active": true}
-```
-
+status/led           → {"color": {"r": 255, "g": 2L298N GND và MT3608 GND
+2. **Kiểm tra IN1/IN2:** IN1 = 3.3V, IN2 = GND (quạt quay thuận)
+3. **Kiểm tra nguồn 12V:** MT3608 OUT+ phải có 12V đến L298N 12V pin
+4. **Kiểm tra PWM:** GPIO23 phải có tín hiệu PWM khi fan bật
+5. **Jumper ENA:** Nếu L298N có jumper trên ENA, hãy **tháo ra** để PWM hoạt động
 ## 🐛 Troubleshooting
 
 ### Fan không hoạt động hoặc chạy liên tục
@@ -257,9 +265,10 @@ TRINITY_IOT/
 
 ---
 
-### 🔧 Known Issues
-- IRF520 module có pull-up internal → cần pull-down 10kΩ external
+##L298N cần nối cứng IN1=HIGH, IN2=LOW để quạt quay đúng chiều
 - MQ135 cần warmup 30-60s để đọc chính xác
+- LCD I2C address mặc định 0x27 (có thể cần scan I2C)
+- Fan sử dụng hysteresis (±1°C) để tránh bật/tắt liên tục
 - LCD I2C address mặc định 0x27 (có thể cần scan I2C)
 
 ### 📞 Support
