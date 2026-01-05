@@ -58,18 +58,19 @@ static float latest_mq_ppm = 0.0f;
 static bool sht31_valid = false;  // Trạng thái cảm biến SHT31
 
 // ========== 4-LEVEL BUZZER SYSTEM ==========
-// Buzzer levels: 0=OFF, 1=WARN(5s), 2=ALERT(2sx5), 3=CRITICAL(1sx10)
+// Buzzer levels: 0=OFF, 1=WARN(5s), 2=ALERT(3s), 3=CRITICAL(1s)
+// Logic được quản lý trong buzzer.c với Task Notification
 typedef enum {
     BUZZER_OFF = 0,           // Tắt
-    BUZZER_WARN_5S = 1,       // Cảnh báo: kêu liên tục 5 giây
-    BUZZER_ALERT_2S_5X = 2,   // Nguy hiểm: kêu 2s, lặp 5 lần
-    BUZZER_CRITICAL_1S_10X = 3 // Nghiêm trọng: kêu 1s, lặp 10 lần liên tục
+    BUZZER_WARN = 1,          // Cảnh báo: tít ngắn, nghỉ 5 giây
+    BUZZER_ALERT = 2,         // Nguy hiểm: tít ngắn, nghỉ 3 giây
+    BUZZER_CRITICAL = 3       // Nghiêm trọng: tít ngắn, nghỉ 1 giây
 } buzzer_level_t;
 
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
 
 // NOTE: buzzer_task_handle và buzzer_pattern_level được quản lý trong main.c
-// mqtt_handler.c gọi buzzer_start_pattern() qua extern
+// mqtt_handler.c có bản sao riêng cho MANUAL mode
 static TaskHandle_t buzzer_task_handle = NULL;
 static volatile int buzzer_pattern_level = 0;  // Shared with buzzer task
 
@@ -195,22 +196,16 @@ static void buzzer_pattern_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-// Khởi chạy/dừng buzzer pattern - GLOBAL để mqtt_handler.c có thể gọi
-void buzzer_start_pattern(int level)
+// Khởi chạy/dừng buzzer pattern
+static void buzzer_start_pattern(int level)
 {
-    if (level == buzzer_pattern_level && buzzer_task_handle != NULL && level > 0) {
+    if (level == buzzer_pattern_level && buzzer_task_handle != NULL) {
         return;  // Đang chạy đúng level
     }
     
     buzzer_pattern_level = level;
     
     if (level <= 0) {
-        // Đợi task dừng
-        if (buzzer_task_handle != NULL) {
-            for (int i = 0; i < 50 && buzzer_task_handle != NULL; i++) {
-                vTaskDelay(pdMS_TO_TICKS(10));
-            }
-        }
         buzzer_off();
         ESP_LOGI(TAG, "[BUZZER] Level 0: OFF");
         return;
@@ -226,23 +221,22 @@ void buzzer_start_pattern(int level)
 
 static buzzer_level_t calculate_buzzer_level(void)
 {
-    // Priority 1: CRITICAL HUMIDITY (> 80%) → Level 3
-    if (latest_humi > 80.0f) {
-        return BUZZER_CRITICAL_1S_10X;
-    }
+    // Buzzer chỉ dựa trên chất lượng không khí (Air Quality Level)
+    // Level 0-1: Good/Fair → Không kêu
+    // Level 2: Moderate → Cảnh báo nhẹ (5s)
+    // Level 3: Poor → Cảnh báo trung (3s)
+    // Level 4: Very Poor → Cảnh báo mạnh (1s)
     
-    // Priority 2: VERY POOR AIR QUALITY (level 4) → Level 2
-    if (latest_air_level >= 3) {
-        return BUZZER_ALERT_2S_5X;
+    switch (latest_air_level) {
+        case 4:  // Very Poor
+            return BUZZER_CRITICAL;  // Tít mỗi 1 giây
+        case 3:  // Poor
+            return BUZZER_ALERT;     // Tít mỗi 3 giây
+        case 2:  // Moderate
+            return BUZZER_WARN;      // Tít mỗi 5 giây
+        default: // Good (0) hoặc Fair (1)
+            return BUZZER_OFF;
     }
-    
-    // Priority 3: HIGH HUMIDITY (> 70%) → Level 1
-    if (latest_humi > 70.0f) {
-        return BUZZER_WARN_5S;
-    }
-    
-    // No alert
-    return BUZZER_OFF;
 }
 
 static void sensor_task(void *pvParameters)
@@ -442,13 +436,13 @@ static void actuator_task(void *pvParameters)
             mqtt_publish_actuator(topic_led, 
                      (latest_air_level >= 0 && latest_air_level <= 4) ? "ON" : "OFF", latest_air_level);
 
-            // ========== 🔔 4-LEVEL BUZZER SYSTEM (CONTINUOUS) ==========
+            // ========== 🔔 BUZZER CONTROL (using buzzer.c API) ==========
             buzzer_level_t new_level = calculate_buzzer_level();
             
             if (new_level != current_buzzer_level) {
                 ESP_LOGI(TAG, "[BUZZER] Level changed: %d → %d", current_buzzer_level, new_level);
                 current_buzzer_level = new_level;
-                buzzer_start_pattern((int)new_level);  // Task tự lặp liên tục
+                buzzer_set_level((int)new_level);  // Sử dụng API mới với Task Notification
             }
             
             mqtt_publish_actuator(topic_buzzer, 
