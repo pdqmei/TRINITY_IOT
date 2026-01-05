@@ -40,6 +40,7 @@ static float calibration_Ro = 0.0f;   // kOhm
 static bool is_calibrated = false;
 
 // ================= NVS FUNCTIONS =================
+__attribute__((unused))
 static esp_err_t save_ro_to_nvs(float ro_value) {
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);

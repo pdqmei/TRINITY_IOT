@@ -69,11 +69,6 @@ typedef enum {
 
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
 
-// NOTE: buzzer_task_handle và buzzer_pattern_level được quản lý trong main.c
-// mqtt_handler.c có bản sao riêng cho MANUAL mode
-static TaskHandle_t buzzer_task_handle = NULL;
-static volatile int buzzer_pattern_level = 0;  // Shared with buzzer task
-
 // Fan control with hysteresis
 static uint8_t current_fan_speed = 0;
 
@@ -136,7 +131,8 @@ static bool read_mq135_with_retry(int *out_raw)
     return false;
 }
 
-
+// ========== BUZZER LEVEL CALCULATION ==========
+// Logic buzzer pattern được quản lý trong buzzer.c với Task Notification
 static buzzer_level_t calculate_buzzer_level(void)
 {
     // Buzzer chỉ dựa trên chất lượng không khí (Air Quality Level)
