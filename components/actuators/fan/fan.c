@@ -6,9 +6,9 @@
  */
 
 /*
- * Fan driver with 4 discrete PWM levels using LEDC.
+ * Fan driver with 3 discrete PWM levels using LEDC.
  * Hardware: Fan controlled through MOSFET on configured PIN_FAN (see app_config.h).
- * Levels: 0..3 (4 levels). fan_set_speed(0-100) maps to nearest level.
+ * Levels: 0 (OFF), 50 (medium), 100 (max) - matching main.c fan control.
  */
 
 #include "fan.h"
@@ -27,7 +27,8 @@
 #define FAN_INVERT_OUTPUT   0
 
 // Discrete duty levels for 10-bit resolution (0-1023)
-static const uint32_t fan_duties[4] = {0, 341, 682, 1023};
+// 3 levels: 0 (OFF), 50 (medium), 100 (max) - matching main.c
+static const uint32_t fan_duties[3] = {0, 512, 1023};  // 0%, 50%, 100%
 
 static void fan_ledc_init(void)
 {
@@ -73,8 +74,8 @@ void fan_on(void) {
     // Restart PWM in case it was stopped by fan_off()
     ledc_timer_resume(FAN_LEDC_MODE, FAN_LEDC_TIMER);
     
-    // Set to max duty (level 3)
-    ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[3]);
+    // Set to max duty (index 2 = 100%)
+    ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[2]);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
 }
 
@@ -91,7 +92,7 @@ void fan_off(void) {
 }
 
 void fan_set_speed(uint8_t speed) {
-    // speed: 0-100 -> map to 4 levels
+    // speed: 0, 50, 100 -> map to 3 levels (matching main.c)
     if (speed == 0) {
         fan_off();
         return;
@@ -100,11 +101,8 @@ void fan_set_speed(uint8_t speed) {
     // Restart PWM in case it was stopped
     ledc_timer_resume(FAN_LEDC_MODE, FAN_LEDC_TIMER);
     
-    // Determine level 1..3
-    uint8_t level = 1;
-    if (speed <= 33) level = 1;
-    else if (speed <= 66) level = 2;
-    else level = 3;
+    // Determine level: 50 -> medium (index 1), 100 -> max (index 2)
+    uint8_t level = (speed >= 75) ? 2 : 1;  // 0-74 -> 50%, 75-100 -> 100%
 
     ledc_set_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL, fan_duties[level]);
     ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CHANNEL);
