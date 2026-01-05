@@ -16,6 +16,19 @@ let isAutoMode = true;
 // UI Elements
 let fanToggle, fanSpeed, ledToggle, ledBrightness, buzzerToggle, buzzerVolume, autoModeToggle;
 
+// Debounce timers
+let debounceTimers = {};
+
+// ===============================================
+// DEBOUNCE HELPER
+// ===============================================
+function debounce(key, callback, delay = 300) {
+    if (debounceTimers[key]) {
+        clearTimeout(debounceTimers[key]);
+    }
+    debounceTimers[key] = setTimeout(callback, delay);
+}
+
 // ===============================================
 // KHỞI TẠO CONTROLS
 // ===============================================
@@ -101,17 +114,23 @@ function handleRangeChange(deviceName, rangeElement, toggleElement = null) {
     const newLevel = parseInt(rangeElement.value);
     const newState = newLevel > 0 ? 'ON' : 'OFF';
     
+    // Update UI ngay lập tức
     if (toggleElement) {
         toggleElement.checked = (newLevel > 0);
     }
 
-    // Gửi MQTT
-    const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
-    sendMQTTCommand(topic, { state: newState, level: newLevel });
+    // Debounce gửi MQTT và Firebase (chỉ gửi sau 300ms không thay đổi)
+    debounce(`range_${deviceName}`, () => {
+        // Gửi MQTT
+        const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
+        sendMQTTCommand(topic, { state: newState, level: newLevel });
 
-    // Update Firebase
-    const dbPath = `smarthome/${currentRoom}/actuators/${deviceName}`;
-    update(ref(db, dbPath), { state: newState, level: newLevel }).catch(console.error);
+        // Update Firebase
+        const dbPath = `smarthome/${currentRoom}/actuators/${deviceName}`;
+        update(ref(db, dbPath), { state: newState, level: newLevel }).catch(console.error);
+        
+        console.log(`📤 ${deviceName}: ${newState}, level=${newLevel}`);
+    }, 300);
 }
 
 // ===============================================
