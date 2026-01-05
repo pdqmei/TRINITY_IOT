@@ -18,22 +18,26 @@
             padding: 40px;
         }
         .room-card {
-            background: linear-gradient(135deg, #1a1a2e, #16213e);
-            border-radius: 20px;
+            background: linear-gradient(135deg, rgba(100, 180, 220, 0.5), rgba(80, 160, 200, 0.4));
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-radius: 25px;
             padding: 40px;
             width: 280px;
             text-align: center;
             transition: all 0.3s ease;
-            border: 2px solid transparent;
+            border: 2px solid rgba(255, 255, 255, 0.3);
             cursor: pointer;
             text-decoration: none;
             color: white;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
         }
         .room-card:hover {
             transform: translateY(-10px);
-            border-color: #00d4ff;
-            box-shadow: 0 20px 40px rgba(0, 212, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.6);
+            box-shadow: 0 20px 40px rgba(0, 150, 200, 0.3);
             color: white;
+            background: linear-gradient(135deg, rgba(120, 200, 240, 0.6), rgba(100, 180, 220, 0.5));
         }
         .room-card .icon {
             font-size: 60px;
@@ -43,10 +47,11 @@
         .room-card h3 {
             font-size: 24px;
             margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
         .room-card p {
             font-size: 14px;
-            color: #aaa;
+            color: rgba(255, 255, 255, 0.85);
         }
         .welcome-section {
             text-align: center;
