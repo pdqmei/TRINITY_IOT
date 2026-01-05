@@ -17,9 +17,6 @@
 
 static const char *TAG = "MQTT";
 
-// Buzzer task handle for non-blocking patterns
-static TaskHandle_t buzzer_task_handle = NULL;
-static volatile int buzzer_pattern_level = 0;
 static esp_mqtt_client_handle_t client = NULL;
 static bool is_connected = false;
 
@@ -145,116 +142,6 @@ static void fan_set_level(int level)
             break;
     }
 }
-// ===============================================
-// 🆕 BUZZER PATTERN TASK (NON-BLOCKING, LOOPING)
-// Chạy pattern trong task riêng, lặp liên tục cho đến khi bị hủy
-// ===============================================
-static void buzzer_pattern_task(void *pvParameters)
-{
-    int level = buzzer_pattern_level;
-    
-    ESP_LOGI(TAG, "🔔 BUZZER Task started - Level %d (looping)", level);
-    
-    while (1) {
-        // Check if task should stop
-        if (buzzer_pattern_level == 0) {
-            break;
-        }
-        
-        switch (level) {
-            case 1:
-                // Level 1: Kêu liên tục 5 giây, nghỉ 2 giây
-                buzzer_on();
-                for (int i = 0; i < 50 && buzzer_pattern_level == level; i++) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
-                buzzer_off();
-                for (int i = 0; i < 20 && buzzer_pattern_level == level; i++) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
-                break;
-                
-            case 2:
-                // Level 2: Kêu 2s, tắt 0.5s, lặp 5 lần, nghỉ 2s
-                for (int cycle = 0; cycle < 5 && buzzer_pattern_level == level; cycle++) {
-                    buzzer_on();
-                    for (int i = 0; i < 20 && buzzer_pattern_level == level; i++) {
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    buzzer_off();
-                    for (int i = 0; i < 5 && buzzer_pattern_level == level; i++) {
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                }
-                // Nghỉ 2s trước khi lặp lại
-                for (int i = 0; i < 20 && buzzer_pattern_level == level; i++) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
-                break;
-                
-            default:
-                // Level 3: Kêu 1s, tắt 0.3s, lặp 10 lần, nghỉ 1s
-                for (int cycle = 0; cycle < 10 && buzzer_pattern_level == level; cycle++) {
-                    buzzer_on();
-                    for (int i = 0; i < 10 && buzzer_pattern_level == level; i++) {
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                    buzzer_off();
-                    for (int i = 0; i < 3 && buzzer_pattern_level == level; i++) {
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-                }
-                // Nghỉ 1s trước khi lặp lại
-                for (int i = 0; i < 10 && buzzer_pattern_level == level; i++) {
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                }
-                break;
-        }
-        
-        // Check again if level changed
-        if (buzzer_pattern_level != level) {
-            level = buzzer_pattern_level;
-            if (level == 0) break;
-            ESP_LOGI(TAG, "🔔 BUZZER Level changed to %d", level);
-        }
-    }
-    
-    buzzer_off();
-    ESP_LOGI(TAG, "🔕 BUZZER Task stopped");
-    buzzer_task_handle = NULL;
-    vTaskDelete(NULL);
-}
-
-// Khởi chạy buzzer pattern trong task riêng (non-blocking, looping)
-static void buzzer_start_pattern(int level)
-{
-    // Nếu level giống cũ và task đang chạy, không làm gì
-    if (level == buzzer_pattern_level && buzzer_task_handle != NULL) {
-        ESP_LOGI(TAG, "🔔 BUZZER already running at level %d", level);
-        return;
-    }
-    
-    // Update level (task sẽ tự detect thay đổi)
-    buzzer_pattern_level = level;
-    
-    if (level <= 0) {
-        // Level 0 = stop
-        buzzer_off();
-        ESP_LOGI(TAG, "🔕 BUZZER OFF");
-        // Task sẽ tự thoát khi thấy level = 0
-        return;
-    }
-    
-    // Nếu chưa có task, tạo mới
-    if (buzzer_task_handle == NULL) {
-        xTaskCreate(buzzer_pattern_task, "buzzer_pattern", 2048, 
-                    NULL, 5, &buzzer_task_handle);
-        ESP_LOGI(TAG, "🔔 BUZZER started - Level %d (continuous)", level);
-    } else {
-        // Task đang chạy, chỉ cần thay đổi level
-        ESP_LOGI(TAG, "🔔 BUZZER level changed to %d", level);
-    }
-}
 
 // ===============================================
 // 🆕 HÀM SET LED THEO LEVEL (NON-BLOCKING)
@@ -372,14 +259,14 @@ static void handle_actuator_command(const char *topic, const char *payload)
         }
     }
     // ========== BUZZER CONTROL ==========
-    // Level: 0=OFF, 1-3=pattern (match AUTO mode, looping until stopped)
+    // Level: 0=OFF, 1-3=pattern (using buzzer_set_level API with Task Notification)
     else if (strstr(topic, "/buzzer") != NULL) {
         device_name = "buzzer";
         
         if (state && strcmp(state, "ON") == 0) {
-            buzzer_start_pattern(level);  // Non-blocking, looping!
+            buzzer_set_level(level);  // Instant response with Task Notification!
         } else {
-            buzzer_start_pattern(0);  // Stop
+            buzzer_set_level(0);  // Stop immediately
             level = 0;
         }
     }
@@ -457,8 +344,8 @@ static void mqtt_event_handler(void *handler_args,
                                 ESP_LOGI(TAG, "🤖 Switched to AUTO mode");
                                 unsubscribe_actuator_topics();
                                 
-                                // ✅ Reset buzzer pattern task từ MANUAL mode
-                                buzzer_start_pattern(0);
+                                // ✅ Reset buzzer từ MANUAL mode (instant with Task Notification)
+                                buzzer_set_level(0);
                                 
                                 // ✅ TRIGGER ACTUATOR UPDATE NGAY LẬP TỨC
                                 // Để fan/LED/buzzer cập nhật theo sensor hiện tại
