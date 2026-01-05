@@ -69,7 +69,7 @@ typedef enum {
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
 
 // NOTE: buzzer_task_handle và buzzer_pattern_level được quản lý trong main.c
-// mqtt_handler.c có bản sao riêng cho MANUAL mode
+// mqtt_handler.c gọi buzzer_start_pattern() qua extern
 static TaskHandle_t buzzer_task_handle = NULL;
 static volatile int buzzer_pattern_level = 0;  // Shared with buzzer task
 
@@ -195,16 +195,22 @@ static void buzzer_pattern_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-// Khởi chạy/dừng buzzer pattern
-static void buzzer_start_pattern(int level)
+// Khởi chạy/dừng buzzer pattern - GLOBAL để mqtt_handler.c có thể gọi
+void buzzer_start_pattern(int level)
 {
-    if (level == buzzer_pattern_level && buzzer_task_handle != NULL) {
+    if (level == buzzer_pattern_level && buzzer_task_handle != NULL && level > 0) {
         return;  // Đang chạy đúng level
     }
     
     buzzer_pattern_level = level;
     
     if (level <= 0) {
+        // Đợi task dừng
+        if (buzzer_task_handle != NULL) {
+            for (int i = 0; i < 50 && buzzer_task_handle != NULL; i++) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
         buzzer_off();
         ESP_LOGI(TAG, "[BUZZER] Level 0: OFF");
         return;
