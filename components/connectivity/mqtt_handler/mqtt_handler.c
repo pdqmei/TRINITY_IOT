@@ -432,6 +432,11 @@ static void mqtt_event_handler(void *handler_args,
                             if (is_auto_mode) {
                                 ESP_LOGI(TAG, "🤖 Switched to AUTO mode");
                                 unsubscribe_actuator_topics();
+                                
+                                // ✅ FIX: Dừng buzzer pattern từ MANUAL mode
+                                // AUTO mode sẽ tự điều khiển buzzer theo sensor
+                                buzzer_start_pattern(0);  // Dừng buzzer pattern task
+                                ESP_LOGI(TAG, "🔕 Reset buzzer for AUTO mode");
                             } else {
                                 ESP_LOGI(TAG, "👤 Switched to MANUAL mode");
                                 subscribe_actuator_topics();
