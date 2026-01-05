@@ -223,13 +223,22 @@ function formatTime(timestamp) {
         }
     }
     
-    // Nếu là Unix timestamp
-    if (typeof timestamp === 'number') {
-        const date = new Date(timestamp * 1000);
+    // Chuyển sang number nếu là string số
+    let ts = timestamp;
+    if (typeof timestamp === 'string' && /^\d+$/.test(timestamp)) {
+        ts = parseInt(timestamp);
+    }
+    
+    // Nếu là Unix timestamp (milliseconds - 13 chữ số)
+    if (typeof ts === 'number') {
+        // Nếu là milliseconds (13 chữ số) thì không cần nhân
+        // Nếu là seconds (10 chữ số) thì nhân 1000
+        const ms = ts > 9999999999 ? ts : ts * 1000;
+        const date = new Date(ms);
         return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     }
     
-    return timestamp;
+    return String(timestamp);
 }
 
 // ===============================================
