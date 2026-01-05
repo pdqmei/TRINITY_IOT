@@ -117,7 +117,34 @@ static void mqtt_report_actuator_state(const char *device, const char *state, in
     esp_mqtt_client_publish(client, topic, payload, 0, 1, 0);
     ESP_LOGI(TAG, "📡 Reported %s state: %s", device, payload);
 }
-
+// ===============================================
+// set level cho fan (0=OFF,1=50%,2=100%)
+// 
+// ===============================================
+static void fan_set_level(int level)
+{
+    const char* level_names[] = {"OFF", "50", "100"};
+    
+    if (level < 0) level = 0;
+    if (level > 2) level = 2;
+    
+    ESP_LOGI(TAG, "🌀 FAN Level %d: %s", level, level_names[level]);
+    
+    switch (level) {
+        case 0: // OFF - Good air quality
+            fan_off();
+            break;
+        case 1: // 50% - Moderate air quality
+            fan_set_speed(50);
+            break;
+        case 2: // 100% - Poor air quality
+            fan_on(); // Full speed
+            break;
+        default:
+            fan_off();
+            break;
+    }
+}
 // ===============================================
 // 🆕 BUZZER PATTERN TASK (NON-BLOCKING, LOOPING)
 // Chạy pattern trong task riêng, lặp liên tục cho đến khi bị hủy
@@ -165,7 +192,6 @@ static void buzzer_pattern_task(void *pvParameters)
                 }
                 break;
                 
-            case 3:
             default:
                 // Level 3: Kêu 1s, tắt 0.3s, lặp 10 lần, nghỉ 1s
                 for (int cycle = 0; cycle < 10 && buzzer_pattern_level == level; cycle++) {
@@ -308,28 +334,26 @@ static void handle_actuator_command(const char *topic, const char *payload)
     // Xác định thiết bị từ topic
     const char *device_name = NULL;
     
-    // ========== FAN CONTROL ==========
-    // Level: 0 = OFF, 50 = 50%, 100 = 100% (3 discrete levels, match AUTO mode)
+    // ========== FAN CONTROL - FIXED VERSION ==========
+    
     if (strstr(topic, "/fan") != NULL) {
         device_name = "fan";
         
         if (state && strcmp(state, "ON") == 0) {
-            // Chỉ chấp nhận 3 level: 0, 50, 100
-            if (level >= 100) {
-                fan_on();  // 100% = full speed
-                level = 100;
-                ESP_LOGI(TAG, "✅ FAN 100%% (full speed)");
-            } else if (level >= 50) {
-                fan_set_speed(50);  // 50% = medium
-                level = 50;
-                ESP_LOGI(TAG, "✅ FAN 50%% (medium speed)");
-            } else {
-                fan_off();  // <50 = OFF
-                level = 0;
-                ESP_LOGI(TAG, "✅ FAN OFF (level < 50)");
-            }
+            // ✅ FIX: Sử dụng level trực tiếp từ web (0, 1, 2)
+            int fan_level = level;
+            
+            // Đảm bảo level trong khoảng hợp lệ
+            if (fan_level < 0) fan_level = 0;
+            if (fan_level > 2) fan_level = 2;
+            
+            fan_set_level(fan_level);
+            level = fan_level; // Report level đã sử dụng
+            
+            const char* level_desc[] = {"OFF", "50%", "100%"};
+            ESP_LOGI(TAG, "✅ FAN set to level %d (%s)", fan_level, level_desc[fan_level]);
         } else {
-            fan_off();
+            fan_set_level(0); // OFF
             level = 0;
             ESP_LOGI(TAG, "✅ FAN OFF");
         }

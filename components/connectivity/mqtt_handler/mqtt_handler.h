@@ -14,5 +14,6 @@ void mqtt_send_data(const char* topic, float value);
 void mqtt_publish_actuator(const char *topic, const char *state, int level);
 
 bool mqtt_is_auto_mode(void);
+bool mqtt_is_auto_mode_initialized(void);
 bool mqtt_is_connected(void);
 #endif
