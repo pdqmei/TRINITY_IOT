@@ -29,7 +29,7 @@ static bool auto_mode_initialized = false;  // ✅ FIX VẤN ĐỀ 1
 // Room ID (được set từ main.c)
 static char current_room_id[32] = "livingroom";
 
-// Topic subscriptions
+// Topic subscriptions - sử dụng wildcard để nhận từ tất cả rooms
 static char topic_fan[128];
 static char topic_led[128];
 static char topic_buzzer[128];

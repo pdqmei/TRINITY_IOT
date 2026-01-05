@@ -131,6 +131,8 @@ static bool read_mq135_with_retry(int *out_raw)
     return false;
 }
 
+// ========== BUZZER LEVEL CALCULATION ==========
+// Logic buzzer pattern được quản lý trong buzzer.c với Task Notification
 static buzzer_level_t calculate_buzzer_level(void)
 {
     // Buzzer chỉ dựa trên chất lượng không khí (Air Quality Level)

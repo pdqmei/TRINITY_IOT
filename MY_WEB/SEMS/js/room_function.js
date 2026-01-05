@@ -13,6 +13,9 @@ import { sendMQTTCommand, getCurrentRoom, setOnActuatorUpdate } from "./mqtt_roo
 let currentRoom = 'livingroom';
 let isAutoMode = true;
 
+// ✅ Phòng có ESP32 thật (các phòng khác giả lập)
+const REAL_ESP_ROOM = 'livingroom';
+
 // UI Elements
 let fanToggle, fanSpeed, ledToggle, ledBrightness, buzzerToggle, buzzerVolume, autoModeToggle;
 
@@ -27,6 +30,13 @@ function debounce(key, callback, delay = 300) {
         clearTimeout(debounceTimers[key]);
     }
     debounceTimers[key] = setTimeout(callback, delay);
+}
+
+// ===============================================
+// KIỂM TRA PHÒNG CÓ ESP32 THẬT
+// ===============================================
+function isRealESPRoom() {
+    return currentRoom === REAL_ESP_ROOM;
 }
 
 // ===============================================
@@ -89,11 +99,15 @@ function handleToggle(deviceName, toggleElement, sliderElement = null) {
     const newState = isChecked ? 'ON' : 'OFF';
     const currentLevel = (newState === 'OFF') ? 0 : (sliderElement ? Number(sliderElement.value) : 0);
 
-    // Gửi MQTT
-    const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
-    sendMQTTCommand(topic, { state: newState, level: currentLevel });
+    // ✅ Chỉ gửi MQTT nếu phòng có ESP32 thật
+    if (isRealESPRoom()) {
+        const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
+        sendMQTTCommand(topic, { state: newState, level: currentLevel });
+    } else {
+        console.log(`🎭 Simulated ${deviceName}: ${newState}, level=${currentLevel}`);
+    }
 
-    // Update Firebase
+    // Update Firebase (tất cả phòng)
     const dbPath = `smarthome/${currentRoom}/actuators/${deviceName}`;
     update(ref(db, dbPath), { state: newState, level: currentLevel })
         .then(() => {
@@ -121,11 +135,15 @@ function handleRangeChange(deviceName, rangeElement, toggleElement = null) {
 
     // Debounce gửi MQTT và Firebase (chỉ gửi sau 300ms không thay đổi)
     debounce(`range_${deviceName}`, () => {
-        // Gửi MQTT
-        const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
-        sendMQTTCommand(topic, { state: newState, level: newLevel });
+        // ✅ Chỉ gửi MQTT nếu phòng có ESP32 thật
+        if (isRealESPRoom()) {
+            const topic = `smarthome/${currentRoom}/actuators/${deviceName}`;
+            sendMQTTCommand(topic, { state: newState, level: newLevel });
+        } else {
+            console.log(`🎭 Simulated ${deviceName}: ${newState}, level=${newLevel}`);
+        }
 
-        // Update Firebase
+        // Update Firebase (tất cả phòng)
         const dbPath = `smarthome/${currentRoom}/actuators/${deviceName}`;
         update(ref(db, dbPath), { state: newState, level: newLevel }).catch(console.error);
         
