@@ -3,12 +3,14 @@ import { ref, update, get, query, orderByKey, limitToLast } from "https://www.gs
 import { sendMQTTCommand } from "./mqtt_con.js";
 import { switchChartsRoom } from './chart.js';
 
-// ===============================================
-// BIẾN LƯU GIÁ TRỊ SENSOR (GLOBAL)
-// ===============================================
-export let tempValue = null;
-export let humiValue = null;
-export let co2Value = null;
+/// ===============================
+// SENSOR CACHE THEO PHÒNG
+// ===============================
+export const sensorCache = {
+    kitchen: { temp: null, humi: null, co2: null },
+    bedroom: { temp: null, humi: null, co2: null },
+    livingroom: { temp: null, humi: null, co2: null }
+};
 
 // 1. Theo dõi phòng hiện tại 
 let currentRoom = 'kitchen'; 
@@ -134,20 +136,20 @@ function handleRangeChange(deviceName, rangeElement, toggleElement = null) {
     });
 }
 
-function handlesensorUpdate(sensorName, value) {
-    const dbPath = `${getSensorsBasePath()}/${sensorName}`; 
-    update(ref(db, dbPath), {
-        value: value,
-        ts: Date.now()
-    })
-    .then(() => {
-        console.log(`${sensorName} updated in ${currentRoom}: ${value}`);
-    })
-    .catch((error) => {
-        console.error(`Lỗi khi cập nhật ${sensorName} in ${currentRoom}:`, error);
-    });
-}
 
+function renderSensorsFromCache(room) {
+    const data = sensorCache[room];
+    if (!data) return;
+
+    document.getElementById('tempValue').innerText =
+        data.temp !== null ? data.temp.toFixed(1) : '--';
+
+    document.getElementById('humiValue').innerText =
+        data.humi !== null ? data.humi.toFixed(1) : '--';
+
+    document.getElementById('co2Value').innerText =
+        data.co2 !== null ? Math.round(data.co2) : '--';
+}
 // ===============================================
 // HÀM CẬP NHẬT SENSOR TỪ MQTT (ĐƯỢC GỌI TỪ mqtt_con.js)
 // ===============================================
@@ -156,20 +158,23 @@ export function updateSensorFromMQTT(topic, data) {
     const parts = topic.split("/");
     const room = parts[1];
     const sensorName = parts[3]; // "temp", "humi", "co2"
-
+    if (!['temp', 'humi', 'co2'].includes(sensorName)) {
+    console.warn(`⚠️ Unknown sensor: ${sensorName}`);
+    return;
+    }
     // ✅ LƯU VÀO BIẾN GLOBAL
-    if (sensorName === "temp") {
-        tempValue = parseFloat(data.value);
-        console.log(`🌡️ Temperature variable updated: ${tempValue} (room: ${room})`);
-    } 
-    else if (sensorName === "humi") {
-        humiValue = parseFloat(data.value);
-        console.log(`💧 Humidity variable updated: ${humiValue} (room: ${room})`);
-    }
-    else if (sensorName === "co2") {
-        co2Value = parseFloat(data.value);
-        console.log(`☁️ CO2 variable updated: ${co2Value} (room: ${room})`);
-    }
+
+
+            // đảm bảo room tồn tại
+        if (!sensorCache[room]) {
+            sensorCache[room] = { temp: null, humi: null, co2: null };
+        }
+
+        // lưu theo đúng phòng
+        sensorCache[room][sensorName] = parseFloat(data.value);
+
+    console.log(`📦 Cache updated [${room}] ${sensorName} = ${data.value}`);
+ 
 
     // 1️⃣ GHI VÀO FIREBASE THEO CẤU TRÚC TIME-SERIES
     // Đường dẫn: smarthome/bedroom/sensors/temp/{timestamp}
@@ -188,27 +193,19 @@ export function updateSensorFromMQTT(topic, data) {
 
     // 2️⃣ Update UI realtime (CHỈ KHI ĐÚNG PHÒNG ĐANG XEM)
     if (room === currentRoom) {
-        const map = {
-            temp: "tempValue",
-            humi: "humiValue",
-            co2: "co2Value"
-        };
+    const el = document.getElementById(
+        sensorName === "temp" ? "tempValue" :
+        sensorName === "humi" ? "humiValue" :
+        "co2Value"
+    );
 
-        if (map[sensorName]) {
-            const el = document.getElementById(map[sensorName]);
-            if (el) {
-                // Format hiển thị
-                if (sensorName === "temp" || sensorName === "humi") {
-                    el.innerText = parseFloat(data.value).toFixed(1);
-                } else {
-                    el.innerText = Math.round(data.value);
-                }
-                console.log(`✅ UI updated: ${sensorName} = ${data.value}`);
-            }
-        }
-    } else {
-        console.log(`ℹ️ Data from ${room}, but currently viewing ${currentRoom}. UI not updated.`);
+    if (el) {
+        el.innerText =
+            sensorName === "co2"
+            ? Math.round(data.value)
+            : parseFloat(data.value).toFixed(1);
     }
+}
 }
 
 // ===============================================
@@ -284,14 +281,12 @@ async function syncSensorsFromFirebase() {
                 const latestTimestamp = Object.keys(data)[0];
                 const latestValue = data[latestTimestamp].value;
 
-                // ✅ Cập nhật biến global
-                if (sensor.name === "temp") {
-                    tempValue = parseFloat(latestValue);
-                } else if (sensor.name === "humi") {
-                    humiValue = parseFloat(latestValue);
-                } else if (sensor.name === "co2") {
-                    co2Value = parseFloat(latestValue);
-                }
+                // đảm bảo cache tồn tại
+            if (!sensorCache[currentRoom]) {
+                sensorCache[currentRoom] = { temp: null, humi: null, co2: null };
+            }
+
+            sensorCache[currentRoom][sensor.name] = parseFloat(latestValue);
 
                 // Cập nhật UI
                 const el = document.getElementById(sensor.elementId);
@@ -342,7 +337,7 @@ roomButtons.forEach(button => {
         const newRoom = event.target.getAttribute('data-room');
         if (newRoom && newRoom !== currentRoom) {
             currentRoom = newRoom;
-            
+            renderSensorsFromCache(currentRoom);
             // Cập nhật giao diện (CSS active class)
             roomButtons.forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');

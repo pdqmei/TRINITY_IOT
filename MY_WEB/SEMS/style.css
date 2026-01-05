@@ -49,21 +49,78 @@ body::before {
     display: flex;
     align-items: center;
     gap: 15px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 0.3s ease;
+}
+
+.logo-section:hover {
+    transform: scale(1.02);
 }
 
 .header-logo {
-    width: 50px;
-    height: 50px;
+    width: 70px;
+    height: 70px;
     object-fit: contain;
     filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
 }
 
 .site-title {
-    color: white;
-    font-size: 35px;
+    color: #ffffff;
+    font-size: 32px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
     margin: 0;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* ===== ROOM NAVIGATION PILLS ===== */
+.nav-rooms {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.room-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: rgba(255, 255, 255, 0.15);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50px;
+    color: white;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(5px);
+}
+
+.room-pill:hover {
+    background: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.5);
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.room-pill.active {
+    background: white;
+    border-color: white;
+    color: #0cb0b0;
+    font-weight: 600;
+    box-shadow: 0 4px 20px rgba(255, 255, 255, 0.4);
+}
+
+.room-pill i {
+    font-size: 16px;
+}
+
+/* ===== MODE TOGGLE CONTAINER ===== */
+.mode-toggle-container {
+    display: flex;
+    align-items: center;
 }
 
 /* NAVIGATION MENU */
@@ -411,39 +468,49 @@ body::before {
         inset 0 -1px 0 rgba(0, 0, 0, 0.08);
 }
 .mode-toggle-box {
-    background: linear-gradient(180deg, #0cb0b0 0%, #1da081 100%);
-    border-radius: 25px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.1) 100%);
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 50px;
     padding: 8px 20px;
     display: flex;
     align-items: center;
-    gap: 15px;
+    gap: 12px;
+    backdrop-filter: blur(10px);
     box-shadow: 
-        0 6px 20px rgba(0, 0, 0, 0.25),
-        0 3px 10px rgba(0, 0, 0, 0.15);
+        0 4px 15px rgba(0, 0, 0, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.3);
     transition: all 0.3s ease;
 }
 
 .mode-toggle-box:hover {
     transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.6);
     box-shadow: 
-        0 8px 25px rgba(0, 0, 0, 0.3),
-        0 4px 12px rgba(0, 0, 0, 0.2);
+        0 6px 20px rgba(0, 0, 0, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.mode-icon {
+    font-size: 18px;
+    color: #00ff88;
+    filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.5));
 }
 
 .mode-label {
-    color: white;
-    font-size: 16px;
-    font-weight: 600;
-    letter-spacing: 1px;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    min-width: 65px;
 }
 
 /* TOGGLE SWITCH - iOS Style */
 .toggle-switch {
     position: relative;
     display: inline-block;
-    width: 50px;
-    height: 26px;
+    width: 52px;
+    height: 28px;
     margin: 0;
     cursor: pointer;
 }
@@ -460,7 +527,7 @@ body::before {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(255, 255, 255, 0.3);
+    background-color: rgba(255, 100, 100, 0.6);
     border-radius: 34px;
     transition: all 0.3s ease;
     border: 2px solid rgba(255, 255, 255, 0.5);
@@ -469,20 +536,21 @@ body::before {
 .toggle-slider:before {
     content: "";
     position: absolute;
-    height: 18px;
-    width: 18px;
+    height: 20px;
+    width: 20px;
     left: 2px;
     bottom: 2px;
     background-color: white;
     border-radius: 50%;
     transition: all 0.3s ease;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
-/* Checked State - ON */
+/* Checked State - AUTO ON */
 .toggle-switch input:checked + .toggle-slider {
-    background-color: #f8fcf9;
-    border-color: #ffffff;
+    background: linear-gradient(135deg, #00ff88 0%, #00d4ff 100%);
+    border-color: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 0 15px rgba(0, 255, 136, 0.5);
 }
 
 .toggle-switch input:checked + .toggle-slider:before {
@@ -495,13 +563,15 @@ body::before {
 }
 /* ===== FOOTER ===== */
 #footer {
-    background: linear-gradient(135deg, #0cb0b0 0%, #188e4f 100%);
+    background: linear-gradient(135deg, rgba(12, 176, 176, 0.7) 0%, rgba(24, 142, 79, 0.7) 100%);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     padding: 25px;
     border-radius: 15px;
     margin-top: 30px;
     box-shadow: 
-        0 10px 40px rgba(0, 0, 0, 0.3),
-        0 5px 15px rgba(0, 0, 0, 0.2);
+        0 10px 40px rgba(0, 0, 0, 0.2),
+        0 5px 15px rgba(0, 0, 0, 0.15);
 }
 
 #footer ul {
