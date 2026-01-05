@@ -48,7 +48,6 @@ static moving_average_t ma_air;
 static TaskHandle_t sensor_task_handle = NULL;
 static TaskHandle_t actuator_task_handle = NULL;
 static TaskHandle_t mqtt_task_handle = NULL;
-static TaskHandle_t lcd_task_handle = NULL;
 
 // Latest values
 static float latest_temp = 0.0f;
@@ -59,6 +58,7 @@ static float latest_mq_ppm = 0.0f;
 static bool sht31_valid = false;  // Trạng thái cảm biến SHT31
 
 // ========== 4-LEVEL BUZZER SYSTEM ==========
+// Buzzer levels: 0=OFF, 1=WARN(5s), 2=ALERT(2sx5), 3=CRITICAL(1sx10)
 typedef enum {
     BUZZER_OFF = 0,           // Tắt
     BUZZER_WARN_5S = 1,       // Cảnh báo: kêu liên tục 5 giây
@@ -67,6 +67,9 @@ typedef enum {
 } buzzer_level_t;
 
 static buzzer_level_t current_buzzer_level = BUZZER_OFF;
+
+// NOTE: buzzer_task_handle và buzzer_pattern_level được quản lý trong main.c
+// mqtt_handler.c có bản sao riêng cho MANUAL mode
 static TaskHandle_t buzzer_task_handle = NULL;
 static volatile int buzzer_pattern_level = 0;  // Shared with buzzer task
 
@@ -79,7 +82,19 @@ enum {
     EVT_SENSOR_READY = BIT0,
     EVT_WIFI_CONNECTED = BIT1,
     EVT_MQTT_CONNECTED = BIT2,
+    EVT_MODE_CHANGED = BIT3,  // Trigger khi chuyển AUTO mode
 };
+
+// ===============================================
+// HÀM TRIGGER ACTUATOR UPDATE (GỌI TỪ mqtt_handler.c)
+// ===============================================
+void trigger_actuator_update(void)
+{
+    if (sys_event_group != NULL) {
+        xEventGroupSetBits(sys_event_group, EVT_MODE_CHANGED);
+        ESP_LOGI(TAG, "🔄 Triggered actuator update for AUTO mode");
+    }
+}
 
 void setup_mqtt_topics(const char* room_id)
 {
@@ -282,36 +297,6 @@ static void sensor_task(void *pvParameters)
     }
 }
 
-static void lcd_task(void *pvParameters)
-{
-    (void) pvParameters;
-    
-    ESP_LOGI(TAG, "LCD task started");
-    
-    TickType_t last_wake = xTaskGetTickCount();
-    
-    while (1) {
-        EventBits_t bits = xEventGroupWaitBits(
-            sys_event_group, 
-            EVT_SENSOR_READY, 
-            pdFALSE,
-            pdFALSE,
-            pdMS_TO_TICKS(1000)
-        );
-        
-        if (bits & EVT_SENSOR_READY) {
-            lcd_display_all(
-                latest_temp, 
-                latest_humi, 
-                latest_air_level, 
-                latest_mq_ppm
-            );
-        }
-        
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(5000));
-    }
-}
-
 static void actuator_task(void *pvParameters)
 {
     (void) pvParameters;
@@ -319,13 +304,28 @@ static void actuator_task(void *pvParameters)
     // Actuators already initialized in app_main(), no need to init again
 
     while (1) {
-        EventBits_t bits = xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
-        if (bits & EVT_SENSOR_READY) {
+        // Chờ event từ sensor hoặc mode change
+        EventBits_t bits = xEventGroupWaitBits(
+            sys_event_group, 
+            EVT_SENSOR_READY | EVT_MODE_CHANGED,  // Lắng nghe cả 2 event
+            pdTRUE,  // Clear bits sau khi đọc
+            pdFALSE, // Chỉ cần 1 trong 2 event
+            portMAX_DELAY
+        );
+        
+        if (bits & (EVT_SENSOR_READY | EVT_MODE_CHANGED)) {
 
             if (!mqtt_is_auto_mode()) {
                 ESP_LOGI(TAG, "👤 MANUAL mode - Skipping auto control");
                 vTaskDelay(pdMS_TO_TICKS(1000));
                 continue;
+            }
+
+            // ✅ Nếu vừa chuyển sang AUTO, reset hysteresis state
+            if (bits & EVT_MODE_CHANGED) {
+                current_fan_speed = 0;  // Reset để tính lại từ nhiệt độ hiện tại
+                current_buzzer_level = BUZZER_OFF;
+                ESP_LOGI(TAG, "🔄 Mode changed - Reset hysteresis state");
             }
 
             ESP_LOGI(TAG, "🤖 AUTO mode - Running auto control");
@@ -334,12 +334,10 @@ static void actuator_task(void *pvParameters)
 
             // ========== FAN CONTROL WITH HYSTERESIS ==========
             uint8_t fan_speed = 0;
-            float fan_status = 0.0f;
 
             if (!sht31_valid) {
                 // Không có cảm biến SHT31 -> TẮT QUẠT
                 fan_speed = 0;
-                fan_status = 0.0f;
                 if (current_fan_speed != 0) {
                     ESP_LOGW(TAG, "[FAN] OFF (SHT31 không hoạt động)");
                     fan_off();
@@ -355,12 +353,10 @@ static void actuator_task(void *pvParameters)
                     // Quạt đang TẮT → Bật khi T ≥ 25°C
                     if (latest_temp >= 25.0f) {
                         fan_speed = 50;
-                        fan_status = 0.5f;
                         ESP_LOGI(TAG, "[FAN] 50%% (T=%.1f°C reached 25°C)", latest_temp);
                         fan_set_speed(fan_speed);
                     } else {
                         fan_speed = 0;
-                        fan_status = 0.0f;
                     }
                 }
                 else if (current_fan_speed == 50) {
@@ -368,21 +364,18 @@ static void actuator_task(void *pvParameters)
                     if (latest_temp >= 30.0f) {
                         // Tăng lên 100%
                         fan_speed = 100;
-                        fan_status = 1.0f;
                         ESP_LOGI(TAG, "[FAN] 100%% (T=%.1f°C reached 30°C)", latest_temp);
                         fan_on();
                     } 
                     else if (latest_temp < 24.0f) {
                         // Giảm xuống OFF (hysteresis -1°C)
                         fan_speed = 0;
-                        fan_status = 0.0f;
                         ESP_LOGI(TAG, "[FAN] OFF (T=%.1f°C dropped below 24°C)", latest_temp);
                         fan_off();
                     } 
                     else {
                         // Giữ nguyên 50%
                         fan_speed = 50;
-                        fan_status = 0.5f;
                     }
                 }
                 else if (current_fan_speed == 100) {
@@ -390,56 +383,50 @@ static void actuator_task(void *pvParameters)
                     if (latest_temp < 29.0f) {
                         // Giảm xuống 50% (hysteresis -1°C)
                         fan_speed = 50;
-                        fan_status = 0.5f;
                         ESP_LOGI(TAG, "[FAN] 50%% (T=%.1f°C dropped below 29°C)", latest_temp);
                         fan_set_speed(fan_speed);
                     } 
                     else {
                         // Giữ nguyên 100%
                         fan_speed = 100;
-                        fan_status = 1.0f;
                     }
                 }
             }
             
             current_fan_speed = fan_speed;  // Lưu trạng thái
-            mqtt_publish_actuator(topic_fan, (fan_speed > 0) ? "ON" : "OFF", (int)fan_status);
+            // Fan level: 0=OFF, 1=50%, 2=100% (match MANUAL mode)
+            int fan_level = (fan_speed == 0) ? 0 : ((fan_speed == 50) ? 1 : 2);
+            mqtt_publish_actuator(topic_fan, (fan_speed > 0) ? "ON" : "OFF", fan_level);
 
             // ========== LED CONTROL ==========
+            // LED Colors by Air Quality Level (match MANUAL mode):
+            // Level 0: Green      (0, 1023, 0)     - Good
+            // Level 1: Cyan       (0, 1023, 1023)  - Fair
+            // Level 2: Yellow     (1023, 1023, 0)  - Moderate
+            // Level 3: Red        (1023, 0, 0)     - Poor
+            // Level 4: Purple     (1023, 0, 1023)  - Very Poor
             const char* aq_desc[] = {"Good", "Fair", "Moderate", "Poor", "Very Poor"};
             ESP_LOGI(TAG, "[LED] Air Quality: %s (level %d)", aq_desc[latest_air_level], latest_air_level);
             
             switch (latest_air_level) {
-                case 0: // Green
+                case 0: // Green - Good
                     led_set_rgb(0, 1023, 0);
                     break;
                     
-                case 1: // Cyan (Blue-Green) - dễ phân biệt hơn Yellow
+                case 1: // Cyan - Fair
                     led_set_rgb(0, 1023, 1023);
                     break;
                     
-                case 2: // Yellow
+                case 2: // Yellow - Moderate
                     led_set_rgb(1023, 1023, 0);
                     break;
                     
-                case 3: // Red blink
-                    ESP_LOGW(TAG, "[LED] RED BLINK (poor air)");
-                    for (int i = 0; i < 2; i++) {
-                        led_set_rgb(1023, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(500));
-                        led_set_rgb(0, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(500));
-                    }
+                case 3: // Red - Poor
+                    led_set_rgb(1023, 0, 0);
                     break;
                     
-                case 4: // Purple blink fast
-                    ESP_LOGE(TAG, "[LED] PURPLE BLINK FAST (very poor air)");
-                    for (int i = 0; i < 3; i++) {
-                        led_set_rgb(1023, 0, 1023);
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                        led_set_rgb(0, 0, 0);
-                        vTaskDelay(pdMS_TO_TICKS(200));
-                    }
+                case 4: // Purple - Very Poor
+                    led_set_rgb(1023, 0, 1023);
                     break;
                     
                 default:
@@ -476,6 +463,15 @@ static void mqtt_task(void *pvParameters)
         bool mqtt_connected = mqtt_is_connected();
         gpio_set_level(MQTT_STATUS_LED_GPIO, mqtt_connected ? 1 : 0);
 
+        // ========== LCD UPDATE (đồng bộ với MQTT) ==========
+        lcd_display_all(
+            latest_temp, 
+            latest_humi, 
+            latest_air_level, 
+            latest_mq_ppm
+        );
+
+        // ========== MQTT PUBLISH ==========
         char payload[128];
         snprintf(payload, sizeof(payload), "{\"value\":%.2f,\"unit\":\"C\"}", latest_temp);
         mqtt_send_data(topic_temp, latest_temp);
@@ -486,7 +482,7 @@ static void mqtt_task(void *pvParameters)
         ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
         mqtt_send_data(topic_co2, latest_mq_ppm);
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(5000));
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
     }
 }
 
@@ -574,7 +570,6 @@ void app_main(void)
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 5, &sensor_task_handle);
     xTaskCreate(actuator_task, "actuator_task", 3072, NULL, 6, &actuator_task_handle);
     xTaskCreate(mqtt_task, "mqtt_task", 4096, NULL, 4, &mqtt_task_handle);
-    xTaskCreate(lcd_task, "lcd_task", 3072, NULL, 3, &lcd_task_handle);
 
     ESP_LOGI(TAG, "System initialized");
 }
