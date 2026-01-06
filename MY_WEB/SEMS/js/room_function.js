@@ -5,7 +5,7 @@
 
 import { db } from './config_firebase.js';
 import { ref, update, get, query, orderByKey, limitToLast } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-database.js";
-import { sendMQTTCommand, getCurrentRoom, setOnActuatorUpdate } from "./mqtt_room.js";
+import { sendMQTTCommand, getCurrentRoom, setOnActuatorUpdate, setOnAutoModeUpdate } from "./mqtt_room.js";
 
 // ===============================================
 // BIẾN MODULE
@@ -54,6 +54,8 @@ export function initRoomControls(roomId) {
     
     // Listen actuator updates từ MQTT
     setOnActuatorUpdate(handleActuatorUpdate);
+    // Listen global auto-mode updates từ MQTT
+    setOnAutoModeUpdate(handleAutoModeUpdate);
     
     console.log(`✅ Controls initialized for room: ${roomId}`);
 }
@@ -267,5 +269,21 @@ function handleActuatorUpdate(deviceName, data) {
         device.toggle.checked = (data.state === 'ON');
         device.slider.value = data.level || 0;
         device.slider.disabled = (data.state !== 'ON') || isAutoMode;
+    }
+}
+
+// ===============================================
+// HANDLE AUTO MODE UPDATE TỪ MQTT
+// ===============================================
+function handleAutoModeUpdate(payload) {
+    try {
+        const newMode = !!payload.isAuto;
+        isAutoMode = newMode;
+        localStorage.setItem('autoMode', isAutoMode);
+        if (autoModeToggle) autoModeToggle.checked = isAutoMode;
+        updateAutoModeUI(isAutoMode);
+        console.log('🔁 Auto mode updated via MQTT ->', isAutoMode ? 'ON' : 'OFF');
+    } catch (e) {
+        console.error('❌ handleAutoModeUpdate error', e);
     }
 }
