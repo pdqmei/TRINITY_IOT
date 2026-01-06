@@ -59,8 +59,8 @@ void wifi_init(void) {
     // NOTE: SSID/PASSWORD should be configured via menuconfig or secure storage
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = "THANH NGUYEN 2.4G",
-            .password = "0904653455",
+            .ssid = "Data",
+            .password = "12345678",
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
@@ -75,4 +75,5 @@ void wifi_init(void) {
 bool wifi_is_connected(void) {
     EventBits_t bits = xEventGroupGetBits(wifi_event_group);
     return (bits & WIFI_CONNECTED_BIT) != 0;
+
 }

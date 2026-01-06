@@ -22,6 +22,12 @@ void mq135_deinit(void);
 
 // ========== BASIC READ ==========
 /**
+ * @brief Check if MQ135 sensor is connected
+ * @return true if sensor is connected and responding
+ */
+bool mq135_is_connected(void);
+
+/**
  * @brief Read raw ADC value (0–4095)
  * @return Raw ADC value
  */

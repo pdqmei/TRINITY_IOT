@@ -18,7 +18,7 @@
 #define SHT31_ADDR         0x44
 
 // Timing (milliseconds)
-#define SENSOR_READ_INTERVAL_MS 10000
-#define MQTT_PUBLISH_INTERVAL_MS 10000
+#define SENSOR_READ_INTERVAL_MS 5000
+#define MQTT_PUBLISH_INTERVAL_MS 5000
 
 #endif // APP_CONFIG_H

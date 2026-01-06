@@ -25,9 +25,9 @@
 #define PARA_A 116.6020682f
 #define PARA_B -2.769034857f
 
-// Số mẫu để lấy trung bình (tăng lên để ổn định hơn)
-#define ADC_SAMPLES 50
-#define ADC_SAMPLE_DELAY_MS 10
+// Số mẫu để lấy trung bình
+#define ADC_SAMPLES 20
+#define ADC_SAMPLE_DELAY_MS 5
 
 // ================= NVS =================
 #define NVS_NAMESPACE "mq135"
@@ -102,91 +102,119 @@ uint16_t mq135_read_raw(void) {
         vTaskDelay(pdMS_TO_TICKS(ADC_SAMPLE_DELAY_MS));
     }
     
-    if (valid_samples < 10) return 0;  // Không đủ mẫu
+    if (valid_samples < 5) return 0;  // Không đủ mẫu
     
-    // Sắp xếp để loại bỏ outliers (bubble sort đơn giản)
-    for (int i = 0; i < valid_samples - 1; i++) {
-        for (int j = 0; j < valid_samples - i - 1; j++) {
-            if (readings[j] > readings[j + 1]) {
-                int temp = readings[j];
-                readings[j] = readings[j + 1];
-                readings[j + 1] = temp;
-            }
-        }
-    }
-    
-    // Lấy trung bình 60% ở giữa (loại bỏ 20% cao nhất và 20% thấp nhất)
-    int start = valid_samples / 5;          // 20%
-    int end = valid_samples - start;        // 80%
-    
-    for (int i = start; i < end; i++) {
+    // Lấy trung bình đơn giản - KHÔNG loại outliers để phản hồi nhanh
+    for (int i = 0; i < valid_samples; i++) {
         sum += readings[i];
     }
     
-    return (uint16_t)(sum / (end - start));
+    return (uint16_t)(sum / valid_samples);
 }
 
-// ================= ĐƠN GIẢN HÓA: MAPPING TRỰC TIẾP TỪ ADC RAW =================
-// Không dùng công thức phức tạp vì module MQ135 rẻ tiền không chính xác
-// Thay vào đó, dùng mapping tuyến tính từ ADC raw sang PPM ước lượng
+// ================= TÍNH PPM THEO CÔNG THỨC DATASHEET =================
+// Công thức: PPM = A * (Rs/Ro)^B
+// Trong đó:
+//   Rs = Điện trở sensor hiện tại (tính từ ADC)
+//   Ro = Điện trở trong không khí sạch (từ calibration)
+//   A = 116.6020682, B = -2.769034857 (hệ số cho CO2)
 //
-// ADC Range (đã test thực tế):
-//   200-400:   Không khí sạch (~400 PPM)
-//   400-600:   Bình thường (~500-800 PPM)
-//   600-900:   Hơi ô nhiễm (~800-1200 PPM)
-//   900-1300:  Ô nhiễm (~1200-2000 PPM)
-//   1300-1800: Nặng (~2000-3000 PPM)
-//   >1800:     Rất nặng (>3000 PPM)
+// Tính Rs từ mạch chia áp:
+//   Vout = ADC_raw / 4095 * Vref
+//   Rs = RL * (Vcc - Vout) / Vout
 
 // Lưu giá trị PPM trước để làm mượt
 static float last_valid_ppm = 400.0f;
+static bool sensor_connected = false;
+
+// Kiểm tra sensor có kết nối không
+// Sensor MQ135 khi hoạt động thường cho ADC trong khoảng 100-3500
+// Nếu ADC quá thấp (<30) hoặc quá cao (>4050) liên tục -> không có sensor
+bool mq135_is_connected(void) {
+    int stable_count = 0;
+    int invalid_count = 0;
+    
+    for (int i = 0; i < 10; i++) {
+        int val = 0;
+        if (adc_oneshot_read(adc_handle, MQ135_PIN, &val) == ESP_OK) {
+            // Giá trị hợp lệ khi sensor kết nối: 100-3800
+            if (val >= 100 && val <= 3800) {
+                stable_count++;
+            }
+            // Giá trị bất thường (floating hoặc short)
+            else if (val < 30 || val > 4050) {
+                invalid_count++;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
+    // Sensor kết nối nếu có ít nhất 6/10 mẫu hợp lệ
+    sensor_connected = (stable_count >= 6);
+    
+    if (!sensor_connected) {
+        ESP_LOGW(TAG, "MQ135 sensor NOT connected! (valid=%d, invalid=%d)", 
+                 stable_count, invalid_count);
+    }
+    
+    return sensor_connected;
+}
 
 float mq135_read_ppm(void) {
     uint16_t raw = mq135_read_raw();
     
-    if (raw < 50 || raw > 4000) {
-        ESP_LOGW(TAG, "ADC raw invalid: %u", raw);
-        return last_valid_ppm;
+    // Kiểm tra giá trị ADC hợp lệ
+    // Floating pin thường cho giá trị rất thấp (<30) hoặc rất cao (>4050)
+    // hoặc dao động mạnh
+    if (raw < 100 || raw > 3800) {
+        ESP_LOGW(TAG, "ADC raw invalid: %u (sensor may not be connected)", raw);
+        sensor_connected = false;
+        return -1.0f;  // Trả về -1 để báo lỗi
     }
     
-    // Mapping đơn giản từ ADC raw sang PPM ước lượng
-    // Công thức tuyến tính: ppm = base + (raw - min) * scale
-    float ppm;
+    sensor_connected = true;
     
-    if (raw < 300) {
-        // Không khí rất sạch: 350-450 PPM
-        ppm = 350.0f + (raw - 100) * 0.5f;
-    } 
-    else if (raw < 600) {
-        // Không khí sạch: 400-700 PPM
-        ppm = 400.0f + (raw - 300) * 1.0f;
-    }
-    else if (raw < 900) {
-        // Bình thường: 700-1000 PPM
-        ppm = 700.0f + (raw - 600) * 1.0f;
-    }
-    else if (raw < 1300) {
-        // Hơi ô nhiễm: 1000-1500 PPM
-        ppm = 1000.0f + (raw - 900) * 1.25f;
-    }
-    else if (raw < 1800) {
-        // Ô nhiễm: 1500-2500 PPM
-        ppm = 1500.0f + (raw - 1300) * 2.0f;
-    }
-    else {
-        // Rất ô nhiễm: 2500+ PPM
-        ppm = 2500.0f + (raw - 1800) * 2.5f;
+    // Tính Vout từ ADC (12-bit = 4095, Vref = 3.3V)
+    float vout = (raw / 4095.0f) * VCC_SENSOR;
+    
+    // Tránh chia cho 0
+    if (vout < 0.05f) {
+        vout = 0.05f;
     }
     
-    // Giới hạn PPM hợp lý
+    // Tính Rs (kOhm) từ mạch chia áp
+    // Rs = RL * (Vcc - Vout) / Vout
+    float rs = RL_VALUE * (VCC_SENSOR - vout) / vout;
+    
+    // Sử dụng Ro từ calibration, nếu chưa có thì dùng giá trị mặc định
+    float ro = calibration_Ro;
+    if (ro <= 0.0f) {
+        // Ro mặc định = Rs_clean_air / CLEAN_AIR_FACTOR
+        // Giả sử Rs trong không khí sạch khoảng 30-50 kOhm
+        ro = 10.0f;  // kOhm - giá trị mặc định hợp lý
+    }
+    
+    // Tính tỷ lệ Rs/Ro
+    float ratio = rs / ro;
+    
+    // Giới hạn ratio để tránh giá trị bất thường
+    if (ratio < 0.1f) ratio = 0.1f;
+    if (ratio > 10.0f) ratio = 10.0f;
+    
+    // Công thức PPM = A * (Rs/Ro)^B
+    // PPM = 116.6 * ratio^(-2.769)
+    float ppm = PARA_A * powf(ratio, PARA_B);
+    
+    // Giới hạn PPM trong khoảng hợp lý
     if (ppm < 350.0f) ppm = 350.0f;
-    if (ppm > 5000.0f) ppm = 5000.0f;
+    if (ppm > 9999.0f) ppm = 9999.0f;
     
-    // Exponential Moving Average để làm mượt (alpha = 0.3)
-    float smoothed_ppm = 0.3f * ppm + 0.7f * last_valid_ppm;
+    // Exponential Moving Average - alpha = 0.6 để cân bằng giữa phản hồi và ổn định
+    float smoothed_ppm = 0.6f * ppm + 0.4f * last_valid_ppm;
     last_valid_ppm = smoothed_ppm;
 
-    ESP_LOGI(TAG, "ADC=%u → PPM=%.0f (smooth=%.0f)", raw, ppm, smoothed_ppm);
+    ESP_LOGI(TAG, "ADC=%u, Vout=%.2fV, Rs=%.1fk, Rs/Ro=%.2f → PPM=%.0f (smooth=%.0f)", 
+             raw, vout, rs, ratio, ppm, smoothed_ppm);
 
     return smoothed_ppm;
 }
