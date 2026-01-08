@@ -183,26 +183,33 @@ static void sensor_task(void *pvParameters)
         if (!mq_ok) {
             ESP_LOGE(TAG, "MQ135 read failed, using last value");
         } else {
-            float ppm = mq135_read_ppm();
-            
-            // AQ level dựa trên ADC raw (ổn định hơn ppm)
-            int level;
-            if (mq_raw < 600) level = 0;          // Clean
-            else if (mq_raw < 900) level = 1;     // Fair
-            else if (mq_raw < 1300) level = 2;    // Moderate
-            else if (mq_raw < 1800) level = 3;    // Poor
-            else level = 4;                       // Very Poor
-            
-            ma_add(&ma_air, (float)level);
-            latest_air_level = (int)ma_get(&ma_air);
+            // Chỉ xử lý nếu ADC raw hợp lệ (100-3800)
+            if (mq_raw >= 100 && mq_raw <= 3800) {
+                float ppm = mq135_read_ppm();
+                
+                // AQ level dựa trên ADC raw (ổn định hơn ppm)
+                int level;
+                if (mq_raw < 600) level = 0;          // Clean
+                else if (mq_raw < 900) level = 1;     // Fair
+                else if (mq_raw < 1300) level = 2;    // Moderate
+                else if (mq_raw < 1800) level = 3;    // Poor
+                else level = 4;                       // Very Poor
+                
+                ma_add(&ma_air, (float)level);
+                latest_air_level = (int)ma_get(&ma_air);
 
-            latest_mq_raw = mq_raw;
-            latest_mq_ppm = (ppm >= 0.0f) ? ppm : 0.0f;
-
-            if (ppm >= 0.0f) {
-                ESP_LOGI(TAG, "MQ135: ADC raw=%d, PPM=%.2f, AQ level=%d", mq_raw, ppm, level);
+                latest_mq_raw = mq_raw;
+                // Chỉ cập nhật PPM nếu giá trị hợp lệ (không phải -1)
+                if (ppm >= 0.0f) {
+                    latest_mq_ppm = ppm;
+                    ESP_LOGI(TAG, "MQ135: ADC raw=%d, PPM=%.2f, AQ level=%d", mq_raw, ppm, level);
+                } else {
+                    // Giữ nguyên PPM cũ, không đặt về 0
+                    ESP_LOGW(TAG, "MQ135: ADC raw=%d, PPM read failed, keeping last=%.2f", mq_raw, latest_mq_ppm);
+                }
             } else {
-                ESP_LOGI(TAG, "MQ135: ADC raw=%d, PPM=N/A, AQ level=%d", mq_raw, level);
+                // ADC raw không hợp lệ - sensor có thể mất kết nối
+                ESP_LOGW(TAG, "MQ135: ADC raw=%d invalid (expect 100-3800), keeping last values", mq_raw);
             }
         }
 
@@ -370,14 +377,15 @@ static void actuator_task(void *pvParameters)
 static void mqtt_task(void *pvParameters)
 {
     (void) pvParameters;
-    TickType_t last_wake = xTaskGetTickCount();
-
     while (1) {
+        // Chờ event từ sensor_task báo có dữ liệu mới
+        xEventGroupWaitBits(sys_event_group, EVT_SENSOR_READY, pdTRUE, pdFALSE, portMAX_DELAY);
+
         // Update MQTT status LED
         bool mqtt_connected = mqtt_is_connected();
         gpio_set_level(MQTT_STATUS_LED_GPIO, mqtt_connected ? 1 : 0);
 
-        // ========== LCD UPDATE (đồng bộ với MQTT) ==========
+        // ========== LCD UPDATE (đồng bộ với sensor) ==========
         lcd_display_all(
             latest_temp, 
             latest_humi, 
@@ -395,8 +403,6 @@ static void mqtt_task(void *pvParameters)
 
         ESP_LOGI(TAG, "MQ135 last raw=%d PPM=%.2f level=%d", latest_mq_raw, latest_mq_ppm, latest_air_level);
         mqtt_send_data(topic_co2, latest_mq_ppm);
-
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(MQTT_PUBLISH_INTERVAL_MS));
     }
 }
 
