@@ -1,5 +1,7 @@
 #include "mq135.h"
 #include "esp_log.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
@@ -36,6 +38,7 @@
 static const char *TAG = "MQ135";
 
 static adc_oneshot_unit_handle_t adc_handle = NULL;
+static adc_cali_handle_t adc_cali_handle = NULL;  // ⭐ THÊM: ADC calibration handle
 static float calibration_Ro = 0.0f;   // kOhm
 static bool is_calibrated = false;
 
@@ -77,6 +80,21 @@ void mq135_init(void) {
         .atten = MQ135_ATTEN,
     };
     adc_oneshot_config_channel(adc_handle, MQ135_PIN, &chan_cfg);
+
+    // ⭐ THÊM: Khởi tạo ADC calibration để đọc chính xác hơn
+    adc_cali_line_fitting_config_t cali_config = {
+        .unit_id = ADC_UNIT_1,
+        .atten = MQ135_ATTEN,
+        .bitwidth = MQ135_WIDTH,
+    };
+    
+    esp_err_t ret = adc_cali_create_scheme_line_fitting(&cali_config, &adc_cali_handle);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "ADC calibration initialized successfully");
+    } else {
+        ESP_LOGW(TAG, "ADC calibration failed, using raw values");
+        adc_cali_handle = NULL;
+    }
 
     float ro_nvs = 0.0f;
     if (load_ro_from_nvs(&ro_nvs) == ESP_OK && ro_nvs > 0.0f) {
@@ -174,12 +192,30 @@ float mq135_read_ppm(void) {
     
     sensor_connected = true;
     
+    // ⭐ CẢI TIẾN: Dùng ADC calibration thay vì linear mapping
     // Tính Vout từ ADC (12-bit = 4095, Vref = 3.3V)
-    float vout = (raw / 4095.0f) * VCC_SENSOR;
+    float vout;
+    if (adc_cali_handle) {
+        // Sử dụng calibration chính xác
+        int voltage_mv = 0;
+        esp_err_t ret = adc_cali_raw_to_voltage(adc_cali_handle, raw, &voltage_mv);
+        if (ret == ESP_OK) {
+            vout = voltage_mv / 1000.0f;  // Convert mV to V
+        } else {
+            // Fallback nếu calibration thất bại
+            vout = (raw / 4095.0f) * VCC_SENSOR;
+        }
+    } else {
+        // Không có calibration, dùng linear mapping
+        vout = (raw / 4095.0f) * VCC_SENSOR;
+    }
     
-    // Tránh chia cho 0
+    // Tránh chia cho 0 và giới hạn voltage range
     if (vout < 0.05f) {
         vout = 0.05f;
+    }
+    if (vout > 3.25f) {
+        vout = 3.25f;
     }
     
     // Tính Rs (kOhm) từ mạch chia áp
@@ -197,9 +233,9 @@ float mq135_read_ppm(void) {
     // Tính tỷ lệ Rs/Ro
     float ratio = rs / ro;
     
-    // Giới hạn ratio để tránh giá trị bất thường
-    if (ratio < 0.1f) ratio = 0.1f;
-    if (ratio > 10.0f) ratio = 10.0f;
+    // ⭐ CẢI TIẾN: Giới hạn ratio chặt chẽ hơn để tránh giá trị cực đoan
+    if (ratio < 0.5f) ratio = 0.5f;   // Thay vì 0.1
+    if (ratio > 8.0f) ratio = 8.0f;   // Thay vì 10.0
     
     // Công thức PPM = A * (Rs/Ro)^B
     // PPM = 116.6 * ratio^(-2.769)
@@ -209,36 +245,103 @@ float mq135_read_ppm(void) {
     if (ppm < 350.0f) ppm = 350.0f;
     if (ppm > 9999.0f) ppm = 9999.0f;
     
-    // Exponential Moving Average - alpha = 0.6 để cân bằng giữa phản hồi và ổn định
-    float smoothed_ppm = 0.6f * ppm + 0.4f * last_valid_ppm;
+    // ⭐ CẢI TIẾN: Giảm alpha để ổn định hơn (0.3 thay vì 0.6)
+    // Exponential Moving Average - alpha = 0.3 để ưu tiên ổn định hơn phản hồi
+    float smoothed_ppm = 0.3f * ppm + 0.7f * last_valid_ppm;
     last_valid_ppm = smoothed_ppm;
 
-    ESP_LOGI(TAG, "ADC=%u, Vout=%.2fV, Rs=%.1fk, Rs/Ro=%.2f → PPM=%.0f (smooth=%.0f)", 
+    ESP_LOGI(TAG, "ADC=%u, Vout=%.3fV, Rs=%.2fkΩ, Rs/Ro=%.2f → PPM=%.0f (smooth=%.0f)", 
              raw, vout, rs, ratio, ppm, smoothed_ppm);
 
     return smoothed_ppm;
 }
 
-// ================= CALIBRATION (không cần thiết với mapping đơn giản) =================
+// ================= CALIBRATION =================
 esp_err_t mq135_calibrate(void) {
-    ESP_LOGI(TAG, "MQ135 using simple ADC mapping - no calibration needed");
+    ESP_LOGI(TAG, "Starting MQ135 calibration in clean air...");
+    ESP_LOGI(TAG, "Please ensure sensor is in clean outdoor air (~400ppm CO2)");
     
+    // ⭐ CẢI TIẾN: Warmup đầy đủ hơn
     // Đọc vài mẫu để warmup ADC
     for (int i = 0; i < 10; i++) {
         mq135_read_raw();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if ((i + 1) % 2 == 0) {
+            ESP_LOGI(TAG, "Warmup: %d/10 seconds", i + 1);
+        }
     }
     
-    is_calibrated = true;
-    calibration_Ro = 10.0f;  // Giá trị dummy
+    // ⭐ CẢI TIẾN: Thu thập samples để tính Ro thực sự
+    ESP_LOGI(TAG, "Collecting calibration samples...");
+    float rs_sum = 0.0f;
+    int valid_samples = 0;
     
-    ESP_LOGI(TAG, "MQ135 warmup done, ready to use");
+    for (int i = 0; i < 50; i++) {
+        uint16_t raw = mq135_read_raw();
+        
+        if (raw < 100 || raw > 3800) {
+            ESP_LOGW(TAG, "Invalid sample %d: ADC=%u", i, raw);
+            continue;
+        }
+        
+        // Convert to voltage using calibration if available
+        float vout;
+        if (adc_cali_handle) {
+            int voltage_mv = 0;
+            adc_cali_raw_to_voltage(adc_cali_handle, raw, &voltage_mv);
+            vout = voltage_mv / 1000.0f;
+        } else {
+            vout = (raw / 4095.0f) * VCC_SENSOR;
+        }
+        
+        if (vout < 0.05f) vout = 0.05f;
+        
+        // Calculate Rs
+        float rs = RL_VALUE * (VCC_SENSOR - vout) / vout;
+        rs_sum += rs;
+        valid_samples++;
+        
+        if (i % 10 == 0) {
+            ESP_LOGI(TAG, "Sample %d: ADC=%u, Rs=%.2fkΩ", i, raw, rs);
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+    
+    if (valid_samples < 30) {
+        ESP_LOGE(TAG, "Calibration failed: not enough valid samples (%d)", valid_samples);
+        // Fallback to default
+        calibration_Ro = 10.0f;
+        is_calibrated = true;
+        return ESP_FAIL;
+    }
+    
+    // Calculate average Rs and Ro
+    float rs_avg = rs_sum / valid_samples;
+    calibration_Ro = rs_avg / CLEAN_AIR_FACTOR;
+    
+    ESP_LOGI(TAG, "Calibration complete:");
+    ESP_LOGI(TAG, "  Valid samples: %d", valid_samples);
+    ESP_LOGI(TAG, "  Average Rs: %.2f kΩ", rs_avg);
+    ESP_LOGI(TAG, "  Calculated Ro: %.2f kΩ", calibration_Ro);
+    
+    // Save to NVS
+    esp_err_t err = save_ro_to_nvs(calibration_Ro);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration saved to NVS");
+        is_calibrated = true;
+    } else {
+        ESP_LOGW(TAG, "Failed to save calibration to NVS");
+        is_calibrated = true;  // Still mark as calibrated
+    }
+    
+    ESP_LOGI(TAG, "MQ135 calibration ready");
     return ESP_OK;
 }
 
 bool mq135_has_calibration(void) {
-    // Với mapping đơn giản, luôn sẵn sàng sau khi init
-    return true;
+    // ⭐ CẢI TIẾN: Kiểm tra thực sự có calibration
+    return is_calibrated && (calibration_Ro > 0.0f);
 }
 
 esp_err_t mq135_clear_calibration(void) {
@@ -255,6 +358,12 @@ esp_err_t mq135_clear_calibration(void) {
 }
 
 void mq135_deinit(void) {
+    // ⭐ THÊM: Cleanup ADC calibration handle
+    if (adc_cali_handle) {
+        adc_cali_delete_scheme_line_fitting(adc_cali_handle);
+        adc_cali_handle = NULL;
+    }
+    
     if (adc_handle) {
         adc_oneshot_del_unit(adc_handle);
         adc_handle = NULL;

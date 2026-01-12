@@ -59,7 +59,7 @@ void wifi_init(void) {
     // NOTE: SSID/PASSWORD should be configured via menuconfig or secure storage
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = "THANH NGUYEN 2.4G",
+            .ssid = "THANH NGUYEN 2.4G.",
             .password = "0904653455",
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
